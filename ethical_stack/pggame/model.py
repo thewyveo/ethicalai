@@ -14,6 +14,8 @@ class Card:
     effects: Dict[Stat, int]
     suit: Literal["spade", "heart", "club", "diamond"] = "spade"
     rarity: Literal["common", "uncommon", "rare"] = "common"
+    # Optional artwork filename inside `ethical_stack/src/cards/` (e.g. "8-Transparency.png").
+    art: str | None = None
 
 
 @dataclass

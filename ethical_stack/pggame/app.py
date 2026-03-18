@@ -88,8 +88,8 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         font_tiny = pygame.font.Font(None, 16)
 
     def rtxt(f: pygame.font.Font, text: str, color: Tuple[int, int, int], bold_px: int = 1) -> pygame.Surface:
-        """Crisp (no-AA) text with a tiny faux-bold pass."""
-        base = f.render(text, False, color)
+        """Pixel-crisp text with slight bolding (keeps readability)."""
+        base = f.render(text, True, color)
         if bold_px <= 0:
             return base
         surf = pygame.Surface((base.get_width() + bold_px, base.get_height() + bold_px), pygame.SRCALPHA)
@@ -118,7 +118,7 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
     hover_box = pygame.Rect(8, 110, LOW_W - 16, 46)
 
     # Card size and row position (used for button, deck, trash, cards).
-    CARD_W, CARD_H = 60, 78
+    CARD_W, CARD_H = 80, 104
     card_base_y = LOW_H - CARD_H - 8
 
     constraint_failed: bool = False
@@ -292,6 +292,12 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         s.fill((*fill, max(0, min(255, int(fill_alpha)))))
         surf.blit(s, (inner.x, inner.y))
 
+    def draw_pixel_frame(surf: pygame.Surface, r: pygame.Rect, outer: Tuple[int, int, int], inner: Tuple[int, int, int]) -> None:
+        """Border-only frame (doesn't cover the interior), suitable for card art."""
+        pygame.draw.rect(surf, outer, r, 2)
+        inner_r = r.inflate(-2, -2)
+        pygame.draw.rect(surf, inner, inner_r, 1)
+
     def draw_button(btn: Button, hover: bool) -> None:
         base = GOLD if btn.enabled else PAPER_DARK
         edge = (80, 70, 40) if btn.enabled else (90, 90, 90)
@@ -444,9 +450,14 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             if new_count == old_count:
                 rects = card_rects()
                 for i, (c, r) in enumerate(zip(hand, rects)):
-                    body = PAPER if i not in selected else (250, 248, 240)
-                    edge = suit_color(c.suit)
-                    draw_pixel_border(screen, r, body, edge)
+                    outer = GOLD
+                    if c.art and c.art in card_art_surfs:
+                        screen.blit(card_art_surfs[c.art], r)
+                        draw_pixel_frame(screen, r, outer, PAPER_DARK)
+                    else:
+                        body = PAPER if i not in selected else (250, 248, 240)
+                        edge = GOLD
+                        draw_pixel_border(screen, r, body, edge)
                 return
 
             # Normalized progress for this step.
@@ -470,12 +481,16 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                 y = card_base_y - (5 if i in selected else 0)
                 r = pygame.Rect(x, y, w, h)
 
-                body = PAPER if i not in selected else (250, 248, 240)
-                edge = suit_color(c.suit)
-                draw_pixel_border(screen, r, body, edge)
-                pip = rtxt(font_small, c.suit[0].upper(), edge, bold_px=0)
-                screen.blit(pip, (r.x + 4, r.y + 3))
-                # (Removed) gold dot indicator; selection is lift + shake.
+                outer = GOLD
+                if c.art and c.art in card_art_surfs:
+                    screen.blit(card_art_surfs[c.art], r)
+                    draw_pixel_frame(screen, r, outer, PAPER_DARK)
+                else:
+                    body = PAPER if i not in selected else (250, 248, 240)
+                    edge = GOLD
+                    draw_pixel_border(screen, r, body, edge)
+                    pip = rtxt(font_small, c.suit[0].upper(), edge, bold_px=0)
+                    screen.blit(pip, (r.x + 4, r.y + 3))
 
             # Then draw the new card on an arch path from the deck to its final slot.
             target_x = new_start_x + old_count * (w + gap)
@@ -500,22 +515,37 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         # Normal (no animation): draw real hand at its current centered positions.
         rects = card_rects()
         for i, (c, r) in enumerate(zip(hand, rects)):
-            body = PAPER if i not in selected else (250, 248, 240)
-            edge = suit_color(c.suit)
-            pip = rtxt(font_small, c.suit[0].upper(), edge, bold_px=0)
+            outer = GOLD
+            inner = PAPER_DARK
 
-            # Selected cards "roll" slightly (rotate about center) like being held at the sides.
-            if i in selected:
-                card_surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
-                draw_pixel_border(card_surf, pygame.Rect(0, 0, r.w, r.h), body, edge)
-                card_surf.blit(pip, (4, 3))
-                angle = math.sin((frame * 0.22) + i * 1.1) * 2.0  # degrees, gentle roll
-                rotated = pygame.transform.rotozoom(card_surf, angle, 1.0)
-                dest = rotated.get_rect(center=r.center)
-                screen.blit(rotated, dest)
+            if c.art and c.art in card_art_surfs:
+                if i in selected:
+                    card_surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+                    card_surf.blit(card_art_surfs[c.art], (0, 0))
+                    draw_pixel_frame(card_surf, pygame.Rect(0, 0, r.w, r.h), outer, inner)
+                    angle = math.sin((frame * 0.22) + i * 1.1) * 2.0  # degrees, gentle roll
+                    rotated = pygame.transform.rotozoom(card_surf, angle, 1.0)
+                    dest = rotated.get_rect(center=r.center)
+                    screen.blit(rotated, dest)
+                else:
+                    screen.blit(card_art_surfs[c.art], r)
+                    draw_pixel_frame(screen, r, outer, inner)
             else:
-                draw_pixel_border(screen, r, body, edge)
-                screen.blit(pip, (r.x + 4, r.y + 3))
+                # Fallback when no artwork is assigned.
+                body = PAPER if i not in selected else (250, 248, 240)
+                edge = GOLD
+                pip = rtxt(font_small, c.suit[0].upper(), edge, bold_px=0)
+                if i in selected:
+                    card_surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+                    draw_pixel_border(card_surf, pygame.Rect(0, 0, r.w, r.h), body, edge)
+                    card_surf.blit(pip, (4, 3))
+                    angle = math.sin((frame * 0.22) + i * 1.1) * 2.0
+                    rotated = pygame.transform.rotozoom(card_surf, angle, 1.0)
+                    dest = rotated.get_rect(center=r.center)
+                    screen.blit(rotated, dest)
+                else:
+                    draw_pixel_border(screen, r, body, edge)
+                    screen.blit(pip, (r.x + 4, r.y + 3))
 
     deck_rect = pygame.Rect(10, card_base_y, CARD_W, CARD_H)
     collected_rect = pygame.Rect(LOW_W - 10 - CARD_W, card_base_y, CARD_W, CARD_H)
@@ -543,24 +573,42 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
     if deck_back_surf is not None:
         deck_back_card_surf = pygame.transform.smoothscale(deck_back_surf, (CARD_W, CARD_H))
 
+    # Card artwork cache (optional artwork provided by files in `src/cards/`).
+    card_art_surfs: Dict[str, pygame.Surface] = {}
+    _cards_dir = os.path.join(_src_dir, "cards")
+    if os.path.isdir(_cards_dir):
+        for _fn in os.listdir(_cards_dir):
+            if not _fn.lower().endswith((".png", ".webp")):
+                continue
+            _path = os.path.join(_cards_dir, _fn)
+            try:
+                _surf = pygame.image.load(_path).convert_alpha()
+                # Use non-smooth scaling to keep pixel-art-ish edges.
+                card_art_surfs[_fn] = pygame.transform.scale(_surf, (CARD_W, CARD_H))
+            except Exception:
+                pass
+
     _play_paths = [
         os.path.join(_src_dir, "play.png"),
         os.path.join(_src_dir, "play.webp"),
     ]
     play_surf: Optional[pygame.Surface] = None
     play_btn_surf: Optional[pygame.Surface] = None
+    play_btn_draw_surf: Optional[pygame.Surface] = None
     play_btn_hit_rect: Optional[pygame.Rect] = None
     for _path in _play_paths:
         if os.path.isfile(_path):
             try:
                 play_surf = pygame.image.load(_path).convert_alpha()
-                # Scale to FILL the button rect (no distortion, may crop outside hitbox).
+                # Scale to FIT the button rect (no distortion).
                 iw, ih = play_surf.get_width(), play_surf.get_height()
                 if iw > 0 and ih > 0:
-                    scale = max(btn_play.rect.w / iw, btn_play.rect.h / ih)
+                    scale = min(btn_play.rect.w / iw, btn_play.rect.h / ih)
                     tw = max(1, int(iw * scale))
                     th = max(1, int(ih * scale))
                     play_btn_surf = pygame.transform.smoothscale(play_surf, (tw, th))
+                    # 2x visual size (image only). Hitbox stays at fitted size.
+                    play_btn_draw_surf = pygame.transform.smoothscale(play_surf, (max(1, tw * 2), max(1, th * 2)))
                     # Hitbox will be set each frame from the actual blit rect.
                 break
             except Exception:
@@ -572,13 +620,14 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             draw_button(btn_play, hover)
             play_btn_hit_rect = btn_play.rect.copy()
             return
-        # Draw image centered in the button rect.
-        dest = play_btn_surf.get_rect(center=btn_play.rect.center)
+        # Hitbox uses fitted image rect; draw uses a 2x visual surface.
+        play_btn_hit_rect = play_btn_surf.get_rect(center=btn_play.rect.center)
+        draw_surf = play_btn_draw_surf or play_btn_surf
+        dest = draw_surf.get_rect(center=play_btn_hit_rect.center)
         if hover and btn_play.enabled:
             dest.x += 1
             dest.y += 1
-        screen.blit(play_btn_surf, dest)
-        play_btn_hit_rect = dest
+        screen.blit(draw_surf, dest)
 
     _bg_paths = [
         os.path.join(_src_dir, "background.png"),
@@ -657,24 +706,38 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                     dx = -2 * (len(show) - 1 - j)
                     dy = -2 * (len(show) - 1 - j)
                     r = pygame.Rect(collected_rect.x + dx, collected_rect.y + dy, CARD_W, CARD_H)
-                    edge = suit_color(card.suit)
-                    draw_pixel_border(screen, r, PAPER_DARK, edge)
-                    pip = rtxt(font_small, card.suit[0].upper(), edge, bold_px=0)
-                    screen.blit(pip, (r.x + 4, r.y + 3))
+                    outer = GOLD
+                    if card.art and card.art in card_art_surfs:
+                        screen.blit(card_art_surfs[card.art], r)
+                        draw_pixel_frame(screen, r, outer, PAPER_DARK)
+                    else:
+                        edge = GOLD
+                        draw_pixel_border(screen, r, PAPER_DARK, edge)
 
     def draw_intro() -> None:
         draw_tiled_background()
         draw_pixel_border(screen, pygame.Rect(8, 8, LOW_W - 16, LOW_H - 16), FELT_DARK, GOLD)
 
-        t2 = rtxt(font_small, "Learn ethical AI metrics through play.", PAPER)
-        screen.blit(t2, (14, 32))
-
         lines = [
-            "Round 1: Transparency (explainable vs black box) + Automation.",
-            "Each round introduces a new stat. Meet the requirement to pass.",
-            "R1: Transparency >= 5. R2: Trust >= 5. R3: Fairness >= 5.",
-            "Select up to 3 cards, PLAY once per round. PLAY scores and advances.",
-            "If any stat goes below 0, you lose. Hover cards to see effects.",
+            "The stakes are high. You are a CEO of an AI startup.",
+            "",
+            "",
+            "",
+            "There are four stats that will determine the success of your company:",
+            "- Transparency: How transparent your AI is to the public.",
+            "- Trust: How trusted your AI is by the public.",
+            "- Fairness: How fair your AI is to the public.",
+            "- Automation: How automated your AI is.",
+            "",
+            "",
+            "",
+            "You will be given a deck of cards. Each card will have a stat and a value.",
+            "Select up to 3 cards, LOCK IN once ready. If any stat goes below 0, you lose.",
+            "Hover cards to see effects. Meet the requirement of the round to advance.",
+            "",
+            "",
+            "",
+            "Be careful! The cards you collect will matter..."
         ]
         y = 52
         line_step = font_small.get_linesize() + 5
@@ -786,6 +849,12 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         lmx, lmy = mx // SCALE, my // SCALE
         mouse_low = (lmx, lmy)
 
+        # Compute play button hitbox from actual drawn rect (so clicks work even before first draw).
+        if play_btn_surf is not None:
+            play_btn_hit_rect = play_btn_surf.get_rect(center=btn_play.rect.center)
+        else:
+            play_btn_hit_rect = btn_play.rect.copy()
+
         # buttons enabled rules (must have drawn cards this round before playing)
         btn_play.enabled = (
             (not hard_loss())
@@ -805,7 +874,7 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if mode == "intro":
                     mode = "game"
-                    message = "Pick carefully. Risk is the bill you pay later."
+                    message = "Play up to 3 cards. LOCK IN once ready."
                     continue
                 if mode == "boss":
                     questions = get_final_stage_questions()
@@ -903,12 +972,8 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
 
             # PLAY button only when at least one card is selected
             if len(selected) > 0:
-                # draw first so the hover test uses the real drawn rect (image may be larger than base rect)
-                draw_play_button(False)
-                hover_play = (play_btn_hit_rect or btn_play.rect).collidepoint(mouse_low)
-                if hover_play:
-                    # redraw with hover nudge
-                    draw_play_button(True)
+                hover_play = play_btn_hit_rect.collidepoint(mouse_low)
+                draw_play_button(hover_play)
 
         pygame.transform.scale(screen, (W, H), window)
         pygame.display.flip()

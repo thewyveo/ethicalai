@@ -59,8 +59,9 @@ def _card(
     text: str,
     effects: Dict[Stat, int],
     suit: Literal["spade", "heart", "club", "diamond"] = "spade",
+    art: str | None = None,
 ) -> Card:
-    return Card(key=key, name=name, text=text, effects=effects, suit=suit)
+    return Card(key=key, name=name, text=text, effects=effects, suit=suit, art=art)
 
 
 def get_deck_for_round(rng: random.Random, round_idx: int) -> List[Card]:
@@ -77,6 +78,7 @@ def get_deck_for_round(rng: random.Random, round_idx: int) -> List[Card]:
                 "Explainable: every weight can be inspected. Less automated.",
                 {"transparency": 2, "automation": -1},
                 "diamond",
+                art="20-Lineer_regression.png",
             ),
             _card(
                 "neural_network",
@@ -84,6 +86,7 @@ def get_deck_for_round(rng: random.Random, round_idx: int) -> List[Card]:
                 "Powerful but a black box. Hard to explain. More automated.",
                 {"transparency": -2, "automation": 2},
                 "spade",
+                art="19-neural_network.png",
             ),
             _card(
                 "decision_tree",
@@ -91,6 +94,7 @@ def get_deck_for_round(rng: random.Random, round_idx: int) -> List[Card]:
                 "Readable rules. You can show why a decision was made.",
                 {"transparency": 1, "automation": -1},
                 "diamond",
+                art="8-Transparency.png",
             ),
             _card(
                 "black_box_api",
@@ -98,47 +102,48 @@ def get_deck_for_round(rng: random.Random, round_idx: int) -> List[Card]:
                 "You call a vendor model. Fast, but you cannot explain it.",
                 {"transparency": -2, "automation": 2},
                 "spade",
+                art="5-Black-box-model.png",
             ),
         ]
     elif round_idx == 2:
         # Trust introduced. Choices that build or erode trust.
         cards = [
-            _card("human_oversight", "Human Oversight", "A person can say no. People trust humans in the loop.", {"trust": 2, "automation": -1}, "heart"),
-            _card("full_automation", "Full Automation", "No humans. Faster, but people distrust what they can't question.", {"trust": -2, "automation": 2}, "spade"),
-            _card("user_communication", "User Communication", "You tell people what the system does. Trust grows.", {"trust": 2, "transparency": 1}, "heart"),
-            _card("silent_rollout", "Silent Rollout", "Ship first, explain later. Trust can wait.", {"trust": -1, "automation": 1}, "spade"),
-            _card("explainable_doc", "Explainable Documentation", "One page that explains how it works. Builds trust.", {"trust": 1, "transparency": 2}, "diamond"),
+            _card("human_oversight", "Human Oversight", "A person can say no. People trust humans in the loop.", {"trust": 2, "automation": -1}, "heart", art="A-Human-Oversight.png"),
+            _card("full_automation", "Full Automation", "No humans. Faster, but people distrust what they can't question.", {"trust": -2, "automation": 2}, "spade", art="2-Full-Automation.png"),
+            _card("user_communication", "User Communication", "You tell people what the system does. Trust grows.", {"trust": 2, "transparency": 1}, "heart", art="3-User-Communication.png"),
+            _card("silent_rollout", "Silent Rollout", "Ship first, explain later. Trust can wait.", {"trust": -1, "automation": 1}, "spade", art="11-Safety-Risk-Control.png"),
+            _card("explainable_doc", "Explainable Documentation", "One page that explains how it works. Builds trust.", {"trust": 1, "transparency": 2}, "diamond", art="4-Explainable-documentation.png"),
         ]
     elif round_idx == 3:
         # Fairness introduced.
         cards = [
-            _card("bias_audit", "Bias Audit", "Test who the model fails before the public does.", {"fairness": 2, "automation": -1}, "club"),
-            _card("speed_over_equity", "Speed Over Equity", "Ship fast. Fix fairness later. Rarely later.", {"fairness": -2, "automation": 2}, "spade"),
-            _card("representative_data", "Representative Data", "Fix the dataset's blind spots. Fairer outcomes.", {"fairness": 2, "automation": -1}, "club"),
-            _card("legacy_data", "Legacy Data", "Use historical data as-is. It encodes past bias.", {"fairness": -1, "automation": 1}, "spade"),
-            _card("fairness_constraint", "Fairness Constraint", "Cap disparity even if it costs accuracy.", {"fairness": 2, "trust": 1, "automation": -1}, "club"),
+            _card("bias_audit", "Bias Audit", "Test who the model fails before the public does.", {"fairness": 2, "automation": -1}, "club", art="7-Bias-Fairness.png"),
+            _card("speed_over_equity", "Speed Over Equity", "Ship fast. Fix fairness later. Rarely later.", {"fairness": -2, "automation": 2}, "spade", art="14-Edge-Computing.png"),
+            _card("representative_data", "Representative Data", "Fix the dataset's blind spots. Fairer outcomes.", {"fairness": 2, "automation": -1}, "club", art="24-AB-Testing.png"),
+            _card("legacy_data", "Legacy Data", "Use historical data as-is. It encodes past bias.", {"fairness": -1, "automation": 1}, "spade", art="13-Model-Drift.png"),
+            _card("fairness_constraint", "Fairness Constraint", "Cap disparity even if it costs accuracy.", {"fairness": 2, "trust": 1, "automation": -1}, "club", art="9-Accountability.png"),
         ]
     elif round_idx <= 6:
         # Two-stat and light three-stat tradeoffs.
         cards = [
-            _card("human_in_loop", "Human-in-the-Loop", "Model recommends, human decides. Trust up, automation down.", {"trust": 2, "automation": -2}, "heart"),
-            _card("model_cards", "Model Cards", "One page of truth: limits, data, failure modes.", {"transparency": 2, "trust": 1}, "diamond"),
-            _card("appeals_process", "Appeals Process", "People can challenge decisions. Trust and fairness rise.", {"trust": 2, "fairness": 1, "automation": -1}, "heart"),
-            _card("vendor_black_box", "Vendor Black Box", "Buy a model. Fast, opaque, fragile trust.", {"automation": 2, "transparency": -2, "trust": -1}, "spade"),
-            _card("open_metrics", "Open Metrics", "Publish performance by subgroup. Transparency and fairness.", {"transparency": 2, "fairness": 1}, "diamond"),
-            _card("scale_first", "Scale First", "Grow now. Explain and fix later.", {"automation": 2, "transparency": -1, "trust": -1}, "spade"),
+            _card("human_in_loop", "Human-in-the-Loop", "Model recommends, human decides. Trust up, automation down.", {"trust": 2, "automation": -2}, "heart", art="6-Human-in-the-loop.png"),
+            _card("model_cards", "Model Cards", "One page of truth: limits, data, failure modes.", {"transparency": 2, "trust": 1}, "diamond", art="4-Explainable-documentation.png"),
+            _card("appeals_process", "Appeals Process", "People can challenge decisions. Trust and fairness rise.", {"trust": 2, "fairness": 1, "automation": -1}, "heart", art="9-Accountability.png"),
+            _card("vendor_black_box", "Vendor Black Box", "Buy a model. Fast, opaque, fragile trust.", {"automation": 2, "transparency": -2, "trust": -1}, "spade", art="5-Black-box-model.png"),
+            _card("open_metrics", "Open Metrics", "Publish performance by subgroup. Transparency and fairness.", {"transparency": 2, "fairness": 1}, "diamond", art="8-Transparency.png"),
+            _card("scale_first", "Scale First", "Grow now. Explain and fix later.", {"automation": 2, "transparency": -1, "trust": -1}, "spade", art="12-Alignment.png"),
         ]
     else:
         # Rounds 7–12: harder multi-stat choices (2–3 stats at once).
         cards = [
-            _card("third_party_audit", "Third-Party Audit", "Outsiders stress-test. Trust and fairness up, automation down.", {"trust": 1, "fairness": 2, "automation": -2}, "club"),
-            _card("full_pipeline", "Full Automation Pipeline", "End-to-end automated. Trust and transparency suffer.", {"automation": 3, "trust": -2, "transparency": -1}, "spade"),
-            _card("stakeholder_panel", "Stakeholder Panel", "Affected communities get a say. Trust and fairness.", {"trust": 1, "fairness": 2, "automation": -1}, "heart"),
-            _card("data_minimization", "Data Minimization", "Collect less. Harm less. Trust and fairness up, automation down.", {"trust": 1, "fairness": 1, "automation": -1, "transparency": 1}, "heart"),
-            _card("red_team", "Red Team", "Attack the model before others do. Trust and fairness up.", {"trust": 1, "fairness": 1, "automation": -1}, "club"),
-            _card("shortcut_kpis", "Shortcut KPIs", "Optimize for numbers. Context and trust drop.", {"automation": 2, "transparency": -1, "trust": -1}, "spade"),
-            _card("regulatory_alignment", "Regulatory Alignment", "Build as if you'll explain in court. All ethics up, automation down.", {"trust": 2, "fairness": 1, "transparency": 2, "automation": -2}, "diamond"),
-            _card("growth_at_all_costs", "Growth at All Costs", "Scale first. Trust, fairness, and transparency pay the price.", {"automation": 3, "trust": -2, "fairness": -1, "transparency": -1}, "spade"),
+            _card("third_party_audit", "Third-Party Audit", "Outsiders stress-test. Trust and fairness up, automation down.", {"trust": 1, "fairness": 2, "automation": -2}, "club", art="15-Robustness-Testing.png"),
+            _card("full_pipeline", "Full Automation Pipeline", "End-to-end automated. Trust and transparency suffer.", {"automation": 3, "trust": -2, "transparency": -1}, "spade", art="22-Batch-processing.png"),
+            _card("stakeholder_panel", "Stakeholder Panel", "Affected communities get a say. Trust and fairness.", {"trust": 1, "fairness": 2, "automation": -1}, "heart", art="18-Human-Augmentation.png"),
+            _card("data_minimization", "Data Minimization", "Collect less. Harm less. Trust and fairness up, automation down.", {"trust": 1, "fairness": 1, "automation": -1, "transparency": 1}, "heart", art="10-Data-privacy.png"),
+            _card("red_team", "Red Team", "Attack the model before others do. Trust and fairness up.", {"trust": 1, "fairness": 1, "automation": -1}, "club", art="15-Robustness-Testing.png"),
+            _card("shortcut_kpis", "Shortcut KPIs", "Optimize for numbers. Context and trust drop.", {"automation": 2, "transparency": -1, "trust": -1}, "spade", art="11-Safety-Risk-Control.png"),
+            _card("regulatory_alignment", "Regulatory Alignment", "Build as if you'll explain in court. All ethics up, automation down.", {"trust": 2, "fairness": 1, "transparency": 2, "automation": -2}, "diamond", art="12-Alignment.png"),
+            _card("growth_at_all_costs", "Growth at All Costs", "Scale first. Trust, fairness, and transparency pay the price.", {"automation": 3, "trust": -2, "fairness": -1, "transparency": -1}, "spade", art="21-Real-time-API.png"),
         ]
     out = list(cards)
     rng.shuffle(out)
