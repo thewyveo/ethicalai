@@ -139,6 +139,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
     # Card size (small so they fit the window); art is smooth-scaled to this for readability.
     _pggame_dir = os.path.dirname(os.path.abspath(__file__))
     _src_dir = os.path.join(_pggame_dir, "..", "src")
+    _sfx_dir = os.path.join(_src_dir, "sfx")
     CARD_W, CARD_H = 80, 104
     # Phase 2: base size multiplier; actual target size is dynamic so cards fit.
     PHASE2_BASE_SCALE = 1.58
@@ -149,16 +150,18 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
     PHASE2_UI_X = 16
     PHASE2_UI_Y = 12
     PHASE2_UI_W = LOW_W - 32
-    PHASE2_UI_H = 128
-    PHASE2_UI_LEFT_W = int(PHASE2_UI_W * 0.9)
+    PHASE2_UI_H = 94
+    PHASE2_UI_LEFT_W = int(PHASE2_UI_W * 0.86)
     PHASE2_UI_DIV_X = PHASE2_UI_X + PHASE2_UI_LEFT_W
     PHASE2_UI_CROSS_CENTER = (
         PHASE2_UI_DIV_X + (PHASE2_UI_W - PHASE2_UI_LEFT_W) // 2,
-        PHASE2_UI_Y + 52,
+        PHASE2_UI_Y + PHASE2_UI_H // 2 - 2,
     )
     PHASE2_UI_QUESTION_TEXT_X = PHASE2_UI_X + 12
     PHASE2_UI_QUESTION_TEXT_Y = PHASE2_UI_Y + 30
     PHASE2_PLAY_TARGET = (PHASE2_UI_X + PHASE2_UI_LEFT_W // 2, PHASE2_UI_Y + 80)
+    PHASE2_SCORE_CORRECT = 8
+    PHASE2_SCORE_WRONG = 6
     card_art_surfs: Dict[str, pygame.Surface] = {}
     _cards_dir = os.path.join(_src_dir, "cards")
     if os.path.isdir(_cards_dir):
@@ -173,6 +176,61 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             except Exception:
                 pass
 
+    # --- SFX ---
+    sfx: Dict[str, pygame.mixer.Sound] = {}
+    sfx_enabled = False
+    try:
+        if not pygame.mixer.get_init():
+            pygame.mixer.init()
+        sfx_enabled = True
+    except Exception:
+        sfx_enabled = False
+
+    def _load_sfx(name: str) -> None:
+        if not sfx_enabled:
+            return
+        p = os.path.join(_sfx_dir, f"{name}.mp3")
+        if not os.path.isfile(p):
+            return
+        try:
+            sfx[name] = pygame.mixer.Sound(p)
+        except Exception:
+            pass
+
+    for _n in (
+        "bin",
+        "button",
+        "draw",
+        "equip_common",
+        "equip_rare",
+        "equip_epic",
+        "equip_cursed",
+        "hover",
+        "lose",
+        "win",
+        "woosh",
+    ):
+        _load_sfx(_n)
+
+    # User preference (Settings); independent of mixer init failure.
+    sfx_on = True
+
+    def play_sfx(name: str) -> None:
+        if not sfx_on:
+            return
+        snd = sfx.get(name)
+        if snd is None:
+            return
+        try:
+            snd.play()
+        except Exception:
+            pass
+
+    def play_equip_sfx(card: Card) -> None:
+        rarity = str(getattr(card, "rarity", "common")).lower()
+        mapped = f"equip_{rarity}" if rarity in ("common", "rare", "epic", "cursed") else "equip_common"
+        play_sfx(mapped)
+
     # Credits: author logo (scaled to 1.5x hand card size).
     author1_logo_surf: Optional[pygame.Surface] = None
     _author1_path = os.path.join(_src_dir, "author1.png")
@@ -184,6 +242,26 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             )
         except Exception:
             author1_logo_surf = None
+
+    # Settings screen: SFX icon (decorative).
+    sfx_settings_icon_surf: Optional[pygame.Surface] = None
+    _sfx_icon_path = os.path.join(_src_dir, "sfx_settings.png")
+    if os.path.isfile(_sfx_icon_path):
+        try:
+            _sfx_raw = pygame.image.load(_sfx_icon_path).convert_alpha()
+            _iw, _ih = _sfx_raw.get_width(), _sfx_raw.get_height()
+            _icon_max = 78  # 1.5× previous 52px cap
+            _w, _h = _iw, _ih
+            if _w <= _icon_max and _h <= _icon_max:
+                _w = max(1, int(_iw * 1.5))
+                _h = max(1, int(_ih * 1.5))
+            if _w > _icon_max or _h > _icon_max:
+                _scale = min(_icon_max / float(_w), _icon_max / float(_h))
+                _w = max(1, int(_w * _scale))
+                _h = max(1, int(_h * _scale))
+            sfx_settings_icon_surf = pygame.transform.smoothscale(_sfx_raw, (_w, _h))
+        except Exception:
+            sfx_settings_icon_surf = None
 
     # cards.txt: number, color (r/w), key, rarity — border from card.suit
     cards_pool: List[Card] = load_cards_from_file(_cards_dir)
@@ -242,11 +320,15 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
     hover_active_idx: Optional[int] = None
     frame: int = 0
     game_over_retry_rect: Optional[pygame.Rect] = None
+    game_over_menu_rect: Optional[pygame.Rect] = None
+    game_over_primary_is_menu: bool = False
     menu_play_rect: Optional[pygame.Rect] = None
     menu_credits_rect: Optional[pygame.Rect] = None
     menu_settings_rect: Optional[pygame.Rect] = None
     menu_admin_rect: Optional[pygame.Rect] = None
     credits_back_rect: Optional[pygame.Rect] = None
+    settings_back_rect: Optional[pygame.Rect] = None
+    settings_sfx_toggle_rect: Optional[pygame.Rect] = None
     contract_eval_passed: bool = False
     game_over_from_contract_eval: bool = False
     # Phase 2: post-contract card quiz (only if contract met at end of round 10).
@@ -256,12 +338,14 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
     phase2_start_centers: List[Tuple[int, int]] = []
     phase2_anim_progress: float = 0.0
     PHASE2_ANIM_FRAMES = 52
-    phase2_subphase: str = ""  # anim | play | won | lost
+    phase2_subphase: str = ""  # anim | play | celebrate
     phase2_questions: List[Dict[str, Any]] = []
     phase2_q_index: int = 0
     phase2_strikes: int = 0
     phase2_correct: int = 0
     phase2_used: List[bool] = []
+    # Wrong picks are disabled only for the current question.
+    phase2_wrong_locked: set[int] = set()
     phase2_target_w: int = PHASE2_BASE_W
     phase2_target_h: int = PHASE2_BASE_H
     # Cache for scaled art at different intermediate sizes during animation.
@@ -273,6 +357,15 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
     # (thrown toward the question and faded away). Kept separate from `phase2_used`.
     phase2_play_anims: List[Tuple[int, pygame.Rect, float, Tuple[int, int]]] = []
     PHASE2_PLAY_ANIM_FRAMES = 26
+    phase2_pending_outcome: Optional[bool] = None
+    # Win celebration (5s) before auto-advancing to final page.
+    phase2_win_celebrate_frames: int = 0
+    PHASE2_WIN_CELEBRATE_TOTAL = 165  # 55% of prior duration
+    # (x, y, vx, vy, spin, rot, scale, alpha)
+    phase2_win_burst: List[Tuple[float, float, float, float, float, float, float, float]] = []
+    last_hover_token: Optional[str] = None
+    win_sfx_played: bool = False
+    lose_sfx_played: bool = False
 
     # Active row geometry (used by end_round snapshot and draw_active_row).
     ACTIVE_CARD_W, ACTIVE_CARD_H = int(40 * 1.07), int(52 * 1.07)
@@ -372,8 +465,13 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         nonlocal message, story_line, mode, contract_eval_passed, game_over_from_contract_eval
         nonlocal phase2_played, phase2_passed_challenge, phase2_cards, phase2_start_centers
         nonlocal phase2_anim_progress, phase2_subphase, phase2_questions, phase2_q_index
-        nonlocal phase2_strikes, phase2_correct, phase2_used, phase2_scaled_art_cache
+        nonlocal phase2_strikes, phase2_correct, phase2_used, phase2_wrong_locked, phase2_scaled_art_cache, phase2_pending_outcome
+        nonlocal phase2_win_celebrate_frames, phase2_win_burst
+        nonlocal win_sfx_played, lose_sfx_played
         if hard_loss():
+            if not lose_sfx_played:
+                play_sfx("lose")
+                lose_sfx_played = True
             mode = "over"
             return
         # No round-constraint game over here: always advance to next round so user can draw again.
@@ -391,6 +489,9 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 if not contract_ok:
                     phase2_played = False
                     phase2_passed_challenge = False
+                    if not lose_sfx_played:
+                        play_sfx("lose")
+                        lose_sfx_played = True
                     game_over_from_contract_eval = True
                     mode = "over"
                     return
@@ -426,8 +527,14 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 phase2_strikes = 0
                 phase2_correct = 0
                 phase2_used = [False] * len(phase2_cards)
+                phase2_wrong_locked.clear()
                 phase2_scaled_art_cache.clear()
                 phase2_play_anims.clear()
+                phase2_pending_outcome = None
+                phase2_win_celebrate_frames = 0
+                phase2_win_burst.clear()
+                win_sfx_played = False
+                lose_sfx_played = False
                 game_over_from_contract_eval = False
                 mode = "phase2"
                 return
@@ -630,49 +737,115 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         nonlocal phase2_end_panel_rect
         draw_tiled_background()
         phase2_end_panel_rect = None
+        t_anim = _phase2_ease(phase2_anim_progress) if phase2_subphase == "anim" else 1.0
+
+        # Transition carry-over from Phase 1 while entering Phase 2.
+        if phase2_subphase == "anim":
+            fade_alpha = int((1.0 - t_anim) * 210)
+            if fade_alpha > 0:
+                top_ui = pygame.Surface((LOW_W, msg_text_y + 52), pygame.SRCALPHA)
+                # Stats bar + objective strip silhouettes fading out.
+                pygame.draw.rect(top_ui, (*FELT_DARK, fade_alpha), stat_bar)
+                pygame.draw.rect(top_ui, (*FELT_DARK, fade_alpha), pygame.Rect(8, msg_text_y, LOW_W - 16, 44))
+                pygame.draw.rect(top_ui, (*GOLD, int(fade_alpha * 0.8)), stat_bar, 2)
+                pygame.draw.rect(top_ui, (*GOLD, int(fade_alpha * 0.8)), pygame.Rect(8, msg_text_y, LOW_W - 16, 44), 2)
+                screen.blit(top_ui, (0, 0))
+
+            # Trash exits to the right.
+            tx = int(trash_rect.x + (LOW_W - trash_rect.x + 30) * t_anim)
+            tr = pygame.Rect(tx, trash_rect.y, trash_rect.w, trash_rect.h)
+            if trash_card_surf is not None:
+                screen.blit(trash_card_surf, tr)
+            else:
+                draw_pixel_border(screen, tr, FELT_DARK, (140, 80, 60))
+
+        # Deck remains in Phase 2 as a persistent element.
+        deck_t = t_anim if phase2_subphase == "anim" else 1.0
+        dcx = int(deck_rect.centerx + (LOW_W // 2 - deck_rect.centerx) * deck_t)
+        if deck_back_card_surf is not None:
+            rot = pygame.transform.rotozoom(deck_back_card_surf, -90.0 * deck_t, 1.0)
+            dcy_target = LOW_H - rot.get_height() // 2 + 2
+            dcy = int(deck_rect.centery + (dcy_target - deck_rect.centery) * deck_t)
+            screen.blit(rot, rot.get_rect(center=(dcx, dcy)))
+        else:
+            # Fallback if no deck art available.
+            w0, h0 = CARD_W, CARD_H
+            w1, h1 = CARD_H, CARD_W
+            ww = int(w0 + (w1 - w0) * deck_t)
+            hh = int(h0 + (h1 - h0) * deck_t)
+            dcy_target = LOW_H - hh // 2 + 2
+            dcy = int(deck_rect.centery + (dcy_target - deck_rect.centery) * deck_t)
+            dr = pygame.Rect(0, 0, ww, hh)
+            dr.center = (dcx, dcy)
+            draw_pixel_border(screen, dr, PAPER_DARK, GOLD)
 
         # Top UI: green container for the question + right-side strike strip.
         ui_panel = pygame.Rect(PHASE2_UI_X, PHASE2_UI_Y, PHASE2_UI_W, PHASE2_UI_H)
-        draw_pixel_border_alpha(screen, ui_panel, FELT_DARK, GOLD, fill_alpha=235)
-
-        # Golden pixel divider between question area (left) and strike area (right).
-        for yy in range(PHASE2_UI_Y + 10, PHASE2_UI_Y + PHASE2_UI_H - 10, 6):
-            pygame.draw.rect(
-                screen,
+        ui_alpha_mult = 1.0
+        if phase2_subphase == "anim":
+            # Two-step transition: Phase 1 UI fades out first, then Phase 2 UI fades in.
+            ui_alpha_mult = max(0.0, min(1.0, (t_anim - 0.45) / 0.55))
+        ui_fill_alpha = int(235 * ui_alpha_mult)
+        if ui_alpha_mult < 1.0:
+            # Fade both border and fill together to avoid a bright gold rectangle flash.
+            panel_surf = pygame.Surface((ui_panel.w, ui_panel.h), pygame.SRCALPHA)
+            draw_pixel_border_alpha(
+                panel_surf,
+                pygame.Rect(0, 0, ui_panel.w, ui_panel.h),
+                FELT_DARK,
                 GOLD,
-                pygame.Rect(PHASE2_UI_DIV_X - 1, yy, 3, 3),
+                fill_alpha=ui_fill_alpha,
             )
+            # Draw divider on the same fading surface (prevents full-opacity yellow flash).
+            div_local_x = PHASE2_UI_DIV_X - ui_panel.x
+            for yy in range(10, ui_panel.h - 10, 6):
+                pygame.draw.rect(panel_surf, GOLD, pygame.Rect(div_local_x - 1, yy, 3, 3))
+            panel_surf.set_alpha(max(0, min(255, int(255 * ui_alpha_mult))))
+            screen.blit(panel_surf, ui_panel.topleft)
+        else:
+            draw_pixel_border_alpha(screen, ui_panel, FELT_DARK, GOLD, fill_alpha=ui_fill_alpha)
+            # Golden pixel divider between question area (left) and strike area (right).
+            for yy in range(PHASE2_UI_Y + 10, PHASE2_UI_Y + PHASE2_UI_H - 10, 6):
+                pygame.draw.rect(screen, GOLD, pygame.Rect(PHASE2_UI_DIV_X - 1, yy, 3, 3))
 
         nq = len(phase2_questions)
+        # Avoid per-text alpha during fade-in (can cause scanline-like artifacts with colorkey text).
+        show_ui_text = ui_alpha_mult >= 0.78 or phase2_subphase != "anim"
+        if show_ui_text:
+            score_txt = rtxt(font_small, f"Score {state.score}", GOLD, bold_px=1)
+            screen.blit(score_txt, (PHASE2_UI_X + 10, PHASE2_UI_Y + PHASE2_UI_H - score_txt.get_height() - 6))
 
         # Question text (top-left, ~90% width).
-        if nq > 0 and phase2_subphase in ("play", "anim") and phase2_q_index < nq:
+        if show_ui_text and nq > 0 and phase2_subphase in ("play", "anim") and phase2_q_index < nq:
             q = phase2_questions[phase2_q_index]
             counter = rtxt(
-                font_tiny,
+                font_small,
                 f"Question {phase2_q_index + 1} of {nq}",
                 GOLD,
-                bold_px=0,
+                bold_px=1,
             )
-            screen.blit(counter, (PHASE2_UI_QUESTION_TEXT_X, PHASE2_UI_Y + 6))
+            counter_x = PHASE2_UI_DIV_X - 10 - counter.get_width()
+            screen.blit(counter, (counter_x, PHASE2_UI_Y + 6))
 
-            qy = PHASE2_UI_QUESTION_TEXT_Y
+            qy = PHASE2_UI_QUESTION_TEXT_Y - 2
             qtext = str(q.get("question", ""))
             parts = qtext.split("\n")
             for pi, part in enumerate(parts):
                 for line in wrap_text(part, PHASE2_UI_LEFT_W - 24):
-                    qt = rtxt(font_small, line, PAPER, bold_px=0)
+                    # Top line (context) in red, question line in paper.
+                    col = RED if pi == 0 else PAPER
+                    qt = rtxt(font_small, line, col, bold_px=0)
                     screen.blit(qt, (PHASE2_UI_QUESTION_TEXT_X, qy))
                     qy += font_small.get_linesize() + 3
                 if pi < len(parts) - 1:
                     qy += 2
 
         # Strike indicator (first wrong answer): red cross on the right 10%.
-        if phase2_strikes >= 1 and phase2_subphase in ("play", "anim"):
+        if show_ui_text and phase2_strikes >= 1 and phase2_subphase in ("play", "anim"):
             cx, cy = PHASE2_UI_CROSS_CENTER
-            L = 12
-            pygame.draw.line(screen, RED, (cx - L, cy - L), (cx + L, cy + L), 3)
-            pygame.draw.line(screen, RED, (cx - L, cy + L), (cx + L, cy - L), 3)
+            L = 13
+            pygame.draw.line(screen, RED, (cx - L, cy - L), (cx + L, cy + L), 4)
+            pygame.draw.line(screen, RED, (cx - L, cy + L), (cx + L, cy - L), 4)
             lc = rtxt(font_tiny, "Last chance!", RED, bold_px=0)
             screen.blit(lc, (cx - lc.get_width() // 2, cy + L + 6))
 
@@ -685,7 +858,8 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 continue
             r = rects[i]
             outer = card_border_color(card)
-            hovered = phase2_hover_i == i and phase2_subphase == "play"
+            locked_wrong = i in phase2_wrong_locked
+            hovered = phase2_hover_i == i and phase2_subphase == "play" and not locked_wrong
 
             if hovered:
                 # Reuse the original "active card wobble": rotate the whole card.
@@ -712,6 +886,11 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                     draw_pixel_border(screen, r, PAPER, outer)
                     pip = rtxt(font_small, card.suit[0].upper(), outer, bold_px=0)
                     screen.blit(pip, (r.x + 6, r.y + 5))
+            if locked_wrong:
+                dim = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+                # Dark transparent fade for wrong picks (this question only).
+                dim.fill((20, 18, 20, 140))
+                screen.blit(dim, r.topleft)
 
         # Played-card "throw & fade" animations.
         for card_idx, start_r, prog, target_center in phase2_play_anims:
@@ -744,23 +923,27 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             animated.set_alpha(max(0, min(255, alpha)))
             screen.blit(animated, animated.get_rect(center=(xc, yc)))
 
-        if phase2_subphase in ("won", "lost"):
-            panel = pygame.Rect(32, LOW_H // 2 - 52, LOW_W - 64, 104)
-            phase2_end_panel_rect = panel
-            draw_pixel_border_alpha(screen, panel, FELT_DARK, GOLD, fill_alpha=245)
-            if phase2_subphase == "won":
-                title = rtxt(font_big, "READINESS PASSED", GOLD)
-                sub = rtxt(font_small, "Click to see deployment outcome.", PAPER, bold_px=0)
-            else:
-                title = rtxt(font_big, "READINESS FAILED", RED)
-                sub = rtxt(
-                    font_small,
-                    "Too many wrong answers. Click to continue.",
-                    PAPER,
-                    bold_px=0,
-                )
-            screen.blit(title, (panel.centerx - title.get_width() // 2, panel.y + 18))
-            screen.blit(sub, (panel.centerx - sub.get_width() // 2, panel.y + 52))
+        # Phase 2 hover label: title only.
+        if phase2_hover_i is not None and 0 <= phase2_hover_i < len(phase2_cards):
+            hc = phase2_cards[phase2_hover_i]
+            title = rtxt(font_small, hc.name, PAPER, bold_px=1)
+            pad_x, pad_y = 8, 5
+            box = pygame.Rect(
+                (LOW_W - (title.get_width() + pad_x * 2)) // 2,
+                LOW_H - 86,
+                title.get_width() + pad_x * 2,
+                title.get_height() + pad_y * 2,
+            )
+            draw_pixel_border_alpha(screen, box, FELT_DARK, GOLD, fill_alpha=220)
+            screen.blit(title, (box.x + pad_x, box.y + pad_y))
+
+        # No separate click-through overlay: end transitions auto-advance to game-over page.
+        if phase2_subphase == "celebrate":
+            if deck_back_card_surf is not None:
+                for x, y, _vx, _vy, _spin, rot, scale, alpha in phase2_win_burst:
+                    c = pygame.transform.rotozoom(deck_back_card_surf, rot, scale)
+                    c.set_alpha(max(0, min(255, int(alpha))))
+                    screen.blit(c, c.get_rect(center=(int(x), int(y))))
 
     def draw_message() -> None:
         # Line 1: Objective: [name]
@@ -1366,10 +1549,54 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         back_txt = rtxt(font_small, "Back", GOLD)
         screen.blit(back_txt, (credits_back_rect.centerx - back_txt.get_width() // 2, credits_back_rect.centery - back_txt.get_height() // 2))
 
+    def draw_settings() -> None:
+        nonlocal settings_back_rect, settings_sfx_toggle_rect
+        draw_tiled_background()
+        draw_pixel_border(screen, pygame.Rect(8, 8, LOW_W - 16, LOW_H - 16), FELT_DARK, GOLD)
+        title = rtxt(font_big, "SETTINGS", GOLD)
+        screen.blit(title, ((LOW_W - title.get_width()) // 2, 20))
+        icon_y = 52
+        if sfx_settings_icon_surf is not None:
+            ix = (LOW_W - sfx_settings_icon_surf.get_width()) // 2
+            screen.blit(sfx_settings_icon_surf, (ix, icon_y))
+            icon_y += sfx_settings_icon_surf.get_height() + 15  # gap + 5px lower than prior layout
+        else:
+            icon_y += 15
+        toggle_w, toggle_h = 200, 36
+        settings_sfx_toggle_rect = pygame.Rect((LOW_W - toggle_w) // 2, icon_y, toggle_w, toggle_h)
+        draw_pixel_border(
+            screen,
+            settings_sfx_toggle_rect,
+            GOLD if sfx_on else FELT_DARK,
+            (80, 70, 40),
+        )
+        toggle_label = "SFX: On" if sfx_on else "SFX: Off"
+        tcol = INK if sfx_on else PAPER
+        ttxt = rtxt(font_small, toggle_label, tcol)
+        screen.blit(
+            ttxt,
+            (
+                settings_sfx_toggle_rect.centerx - ttxt.get_width() // 2,
+                settings_sfx_toggle_rect.centery - ttxt.get_height() // 2,
+            ),
+        )
+        settings_back_rect = pygame.Rect(LOW_W // 2 - 60, LOW_H - 44, 120, 28)
+        back_txt = rtxt(font_small, "Back", GOLD)
+        screen.blit(
+            back_txt,
+            (
+                settings_back_rect.centerx - back_txt.get_width() // 2,
+                settings_back_rect.centery - back_txt.get_height() // 2,
+            ),
+        )
+
     def draw_game_over() -> None:
-        nonlocal game_over_retry_rect
+        nonlocal game_over_retry_rect, game_over_menu_rect, game_over_primary_is_menu
         draw_tiled_background()
         draw_pixel_border_alpha(screen, pygame.Rect(40, 60, LOW_W - 80, 180), FELT_DARK, GOLD, fill_alpha=235)
+        game_over_retry_rect = None
+        game_over_menu_rect = None
+        game_over_primary_is_menu = False
         if game_over_from_contract_eval:
             failed = not contract_eval_passed
             msg = "DEPLOYMENT APPROVED" if contract_eval_passed else "DEPLOYMENT DENIED"
@@ -1405,9 +1632,21 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         yy += 16
         retry_w, retry_h = 140, 36
         game_over_retry_rect = pygame.Rect((LOW_W - retry_w) // 2, yy, retry_w, retry_h)
-        draw_pixel_border(screen, game_over_retry_rect, GOLD, (80, 70, 40))
-        rtxt_surf = rtxt(font_small, "Retry", INK)
-        screen.blit(rtxt_surf, (game_over_retry_rect.centerx - rtxt_surf.get_width() // 2, game_over_retry_rect.centery - rtxt_surf.get_height() // 2))
+        if game_over_from_contract_eval and contract_eval_passed:
+            # Win page: single "Menu" button.
+            game_over_primary_is_menu = True
+            draw_pixel_border(screen, game_over_retry_rect, GOLD, (80, 70, 40))
+            rtxt_surf = rtxt(font_small, "Menu", INK)
+            screen.blit(rtxt_surf, (game_over_retry_rect.centerx - rtxt_surf.get_width() // 2, game_over_retry_rect.centery - rtxt_surf.get_height() // 2))
+        else:
+            # Loss page: keep Retry, and add Menu underneath.
+            draw_pixel_border(screen, game_over_retry_rect, GOLD, (80, 70, 40))
+            rtxt_surf = rtxt(font_small, "Retry", INK)
+            screen.blit(rtxt_surf, (game_over_retry_rect.centerx - rtxt_surf.get_width() // 2, game_over_retry_rect.centery - rtxt_surf.get_height() // 2))
+            game_over_menu_rect = pygame.Rect((LOW_W - retry_w) // 2, yy + retry_h + 8, retry_w, retry_h)
+            draw_pixel_border(screen, game_over_menu_rect, FELT_DARK, GOLD)
+            mtxt = rtxt(font_small, "Menu", PAPER)
+            screen.blit(mtxt, (game_over_menu_rect.centerx - mtxt.get_width() // 2, game_over_menu_rect.centery - mtxt.get_height() // 2))
         esc = rtxt(font_small, "ESC to quit", GOLD, bold_px=0)
         screen.blit(esc, ((LOW_W - esc.get_width()) // 2, LOW_H - 24))
 
@@ -1477,8 +1716,10 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
     def start_admin_phase2() -> None:
         nonlocal mode, phase2_played, phase2_passed_challenge, phase2_cards, phase2_start_centers
         nonlocal phase2_anim_progress, phase2_subphase, phase2_questions, phase2_q_index
-        nonlocal phase2_strikes, phase2_correct, phase2_used, phase2_scaled_art_cache, phase2_play_anims
+        nonlocal phase2_strikes, phase2_correct, phase2_used, phase2_wrong_locked, phase2_scaled_art_cache, phase2_play_anims, phase2_pending_outcome
+        nonlocal phase2_win_celebrate_frames, phase2_win_burst
         nonlocal phase2_hover_i, phase2_end_panel_rect, contract_eval_passed, game_over_from_contract_eval
+        nonlocal win_sfx_played, lose_sfx_played
 
         # Curated active set for Phase 2 testing (up to 6 slots).
         admin_keys = [
@@ -1506,8 +1747,14 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         phase2_strikes = 0
         phase2_correct = 0
         phase2_used = []
+        phase2_wrong_locked.clear()
         phase2_scaled_art_cache.clear()
         phase2_play_anims.clear()
+        phase2_pending_outcome = None
+        phase2_win_celebrate_frames = 0
+        phase2_win_burst.clear()
+        win_sfx_played = False
+        lose_sfx_played = False
         phase2_hover_i = None
         phase2_end_panel_rect = None
         phase2_anim_progress = 0.0
@@ -1526,6 +1773,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         desired_q = min(desired_q, len(phase2_cards))
         phase2_questions = pick_phase2_questions(rng, pk, desired_q)
         phase2_used = [False] * len(phase2_cards)
+        phase2_wrong_locked.clear()
 
         contract_eval_passed = False
         game_over_from_contract_eval = False
@@ -1559,17 +1807,32 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if mode == "menu":
                     if menu_play_rect and menu_play_rect.collidepoint(mouse_low):
+                        play_sfx("button")
                         contracts = get_contracts()
                         if contracts:
                             state.scenario_key = rng.choice([c["key"] for c in contracts])
                         mode = "intro"
                     elif menu_credits_rect and menu_credits_rect.collidepoint(mouse_low):
+                        play_sfx("button")
                         mode = "credits"
+                    elif menu_settings_rect and menu_settings_rect.collidepoint(mouse_low):
+                        play_sfx("button")
+                        mode = "settings"
                     elif menu_admin_rect and menu_admin_rect.collidepoint(mouse_low):
+                        play_sfx("button")
                         start_admin_phase2()
-                    # Settings: placeholder, no-op
+                    continue
+                if mode == "settings":
+                    if settings_back_rect and settings_back_rect.collidepoint(mouse_low):
+                        play_sfx("button")
+                        mode = "menu"
+                    elif settings_sfx_toggle_rect and settings_sfx_toggle_rect.collidepoint(mouse_low):
+                        sfx_on = not sfx_on
+                        if sfx_on:
+                            play_sfx("button")
                     continue
                 if mode == "credits" and credits_back_rect and credits_back_rect.collidepoint(mouse_low):
+                    play_sfx("button")
                     mode = "menu"
                     continue
                 if mode == "intro":
@@ -1579,21 +1842,13 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                     mode = "game"
                     continue
                 if mode == "phase2":
-                    if phase2_subphase in ("won", "lost"):
-                        pr = phase2_end_panel_rect
-                        if pr is None or pr.collidepoint(mouse_low):
-                            won = phase2_subphase == "won"
-                            phase2_passed_challenge = won
-                            contract_eval_passed = won
-                            game_over_from_contract_eval = True
-                            mode = "over"
-                    elif phase2_subphase == "play" and phase2_q_index < len(phase2_questions):
+                    if phase2_subphase == "play" and phase2_q_index < len(phase2_questions):
                         # Don't allow multiple answers while a played-card cleanup animation is running.
                         if phase2_play_anims:
                             continue
                         rects = phase2_card_layout_rects()
                         for i, cr in enumerate(rects):
-                            if i >= len(phase2_cards) or (i < len(phase2_used) and phase2_used[i]):
+                            if i >= len(phase2_cards) or (i < len(phase2_used) and phase2_used[i]) or i in phase2_wrong_locked:
                                 continue
                             if not cr.collidepoint(mouse_low):
                                 continue
@@ -1602,27 +1857,62 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                             card = phase2_cards[i]
                             if card.key in acc:
                                 phase2_correct += 1
+                                state.score += PHASE2_SCORE_CORRECT
                                 phase2_used[i] = True
                                 # Animate the played card toward the question, then fade away.
                                 # Anchor is near the question text block.
+                                play_sfx("woosh")
                                 phase2_play_anims.append(
                                     (i, cr.copy(), 0.0, PHASE2_PLAY_TARGET)
                                 )
                                 phase2_q_index += 1
+                                phase2_wrong_locked.clear()
                                 n = len(phase2_questions)
                                 if phase2_q_index >= n:
                                     need = max(0, n - 1)
-                                    if phase2_correct >= need:
-                                        phase2_subphase = "won"
-                                    else:
-                                        phase2_subphase = "lost"
+                                    phase2_pending_outcome = phase2_correct >= need
                             else:
+                                # Wrong answer: card is disabled only for this question.
+                                phase2_wrong_locked.add(i)
+                                state.score -= PHASE2_SCORE_WRONG
                                 phase2_strikes += 1
                                 if phase2_strikes >= 2:
-                                    phase2_subphase = "lost"
+                                    phase2_pending_outcome = False
                             break
                     continue
                 if mode == "over" and game_over_retry_rect and game_over_retry_rect.collidepoint(mouse_low):
+                    play_sfx("button")
+                    # Win screen primary button is Menu; otherwise it's Retry.
+                    if game_over_primary_is_menu:
+                        state = State()
+                        deck, discard, collected, hand = [], [], [], []
+                        selected = []
+                        played_this_round = False
+                        played_effects_this_round.clear()
+                        constraint_failed = False
+                        game_over_from_contract_eval = False
+                        contract_eval_passed = False
+                        phase2_played = False
+                        phase2_passed_challenge = False
+                        phase2_cards.clear()
+                        phase2_start_centers.clear()
+                        phase2_questions.clear()
+                        phase2_used.clear()
+                        phase2_wrong_locked.clear()
+                        phase2_scaled_art_cache.clear()
+                        phase2_play_anims.clear()
+                        phase2_pending_outcome = None
+                        phase2_win_celebrate_frames = 0
+                        phase2_win_burst.clear()
+                        win_sfx_played = False
+                        lose_sfx_played = False
+                        phase2_subphase = ""
+                        phase2_anim_progress = 0.0
+                        hidden_hand_index = None
+                        mode = "menu"
+                        collect_anim_list.clear()
+                        continue
+                    # Retry: immediately restart from Phase 1 (no menu detour).
                     state = State()
                     deck, discard, collected, hand = [], [], [], []
                     selected = []
@@ -1637,8 +1927,50 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                     phase2_start_centers.clear()
                     phase2_questions.clear()
                     phase2_used.clear()
+                    phase2_wrong_locked.clear()
                     phase2_scaled_art_cache.clear()
                     phase2_play_anims.clear()
+                    phase2_pending_outcome = None
+                    phase2_win_celebrate_frames = 0
+                    phase2_win_burst.clear()
+                    win_sfx_played = False
+                    lose_sfx_played = False
+                    phase2_subphase = ""
+                    phase2_anim_progress = 0.0
+                    hidden_hand_index = None
+                    contracts = get_contracts()
+                    if contracts:
+                        state.scenario_key = rng.choice([c["key"] for c in contracts])
+                    start_round()
+                    recompute_stats_from_active(state)
+                    message = "Click deck to draw & advance. Max 5 in hand. Active cards = your stats."
+                    mode = "game"
+                    collect_anim_list.clear()
+                    continue
+                if mode == "over" and game_over_menu_rect and game_over_menu_rect.collidepoint(mouse_low):
+                    play_sfx("button")
+                    state = State()
+                    deck, discard, collected, hand = [], [], [], []
+                    selected = []
+                    played_this_round = False
+                    played_effects_this_round.clear()
+                    constraint_failed = False
+                    game_over_from_contract_eval = False
+                    contract_eval_passed = False
+                    phase2_played = False
+                    phase2_passed_challenge = False
+                    phase2_cards.clear()
+                    phase2_start_centers.clear()
+                    phase2_questions.clear()
+                    phase2_used.clear()
+                    phase2_wrong_locked.clear()
+                    phase2_scaled_art_cache.clear()
+                    phase2_play_anims.clear()
+                    phase2_pending_outcome = None
+                    phase2_win_celebrate_frames = 0
+                    phase2_win_burst.clear()
+                    win_sfx_played = False
+                    lose_sfx_played = False
                     phase2_subphase = ""
                     phase2_anim_progress = 0.0
                     hidden_hand_index = None
@@ -1658,6 +1990,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                         deck_warning_frames = 45
                         deck_warning_hand_full = len(hand) >= hand_limit
                     else:
+                        play_sfx("draw")
                         deck_draw_start_hand_len = len(hand)
                         deck_draw_start_had_black_box = any(c and c.key == "black_box_model" for c in state.active_slots)
                         # Black box: pick the first card slot to face-down immediately.
@@ -1701,6 +2034,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                         if dragging_hand_idx < len(hand):
                             card = hand[dragging_hand_idx]
                             if trash_rect.collidepoint(mouse_low):
+                                play_sfx("bin")
                                 if dragging_hand_idx == hidden_hand_index:
                                     hidden_hand_index = None
                                 elif hidden_hand_index is not None and dragging_hand_idx < hidden_hand_index:
@@ -1745,6 +2079,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                                                     if hidden_hand_index is not None and dragging_hand_idx < hidden_hand_index:
                                                         hidden_hand_index -= 1
                                                     hand.pop(dragging_hand_idx)
+                                                    play_equip_sfx(card)
                                                     on_card_added_to_active(state, first_empty, card)
                                                     recompute_stats_from_active(state)
                                                     dropped_on_active = True
@@ -1772,6 +2107,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                                                 if hidden_hand_index is not None and dragging_hand_idx < hidden_hand_index:
                                                     hidden_hand_index -= 1
                                                 hand.pop(dragging_hand_idx)
+                                                play_equip_sfx(card)
                                                 on_card_added_to_active(state, first_empty, card)
                                                 recompute_stats_from_active(state)
                         dragging_hand_idx = None
@@ -1786,6 +2122,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                                 on_card_removed_from_active(state, dragging_active_idx, card)
                                 recompute_stats_from_active(state)
                             elif trash_rect.collidepoint(mouse_low):
+                                play_sfx("bin")
                                 state.active_slots[dragging_active_idx] = None
                                 on_card_removed_from_active(state, dragging_active_idx, card)
                                 on_card_trashed(state, card)
@@ -1796,8 +2133,20 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                                 on_card_removed_from_active(state, dragging_active_idx, card)
                                 recompute_stats_from_active(state)
                                 start_r = slot_rects[dragging_active_idx].copy()
+                                play_sfx("woosh")
                                 active_to_hand_anim_list.append((card, start_r, 0.0, dragging_active_idx))
                         dragging_active_idx = None
+
+        # Losing from a stat < 0 can happen mid-round (equip / trash / move) before end_round().
+        # draw_game_over() already shows the loss screen when hard_loss(), but mode stayed "game",
+        # so MOUSEBUTTONDOWN hit `continue` and never ran the Retry/Menu handlers.
+        if mode == "game" and (hard_loss() or state.round_idx > state.rounds_total):
+            if hard_loss():
+                game_over_from_contract_eval = False
+                if not lose_sfx_played:
+                    play_sfx("lose")
+                    lose_sfx_played = True
+            mode = "over"
 
         # Hover detection (only in game mode, when not dragging)
         hover_idx = None
@@ -1807,7 +2156,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         if mode == "phase2" and phase2_subphase == "play":
             rects = phase2_card_layout_rects()
             for i, cr in enumerate(rects):
-                if i < len(phase2_used) and phase2_used[i]:
+                if (i < len(phase2_used) and phase2_used[i]) or i in phase2_wrong_locked:
                     continue
                 if cr.collidepoint(mouse_low):
                     phase2_hover_i = i
@@ -1833,10 +2182,28 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                                 hover_idx = i
                                 break
 
+        # Hover SFX: play once when entering a hover target.
+        hover_token: Optional[str] = None
+        if mode == "phase2" and phase2_hover_i is not None:
+            hover_token = f"p2:{phase2_hover_i}"
+        elif mode == "game":
+            if hover_active_idx is not None:
+                hover_token = f"a:{hover_active_idx}"
+            elif hover_idx is not None:
+                hover_token = f"h:{hover_idx}"
+            elif deck_rect.collidepoint(mouse_low):
+                hover_token = "deck"
+        if hover_token != last_hover_token:
+            if hover_token is not None:
+                play_sfx("hover")
+            last_hover_token = hover_token
+
         if mode == "menu":
             draw_menu()
         elif mode == "credits":
             draw_credits()
+        elif mode == "settings":
+            draw_settings()
         elif mode == "intro":
             draw_intro()
         elif mode == "phase2":
@@ -1945,6 +2312,72 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                     phase2_play_anims.pop(j)
                 else:
                     phase2_play_anims[j] = (card_idx, start_r, prog, target_center)
+
+        # Start result flow from Phase 2 (after card animations complete).
+        if mode == "phase2" and phase2_pending_outcome is not None and not phase2_play_anims:
+            won = bool(phase2_pending_outcome)
+            if won:
+                # 5s solitaire-like celebration before moving to win page.
+                if phase2_subphase != "celebrate":
+                    if not win_sfx_played:
+                        play_sfx("win")
+                        win_sfx_played = True
+                    phase2_subphase = "celebrate"
+                    phase2_win_celebrate_frames = PHASE2_WIN_CELEBRATE_TOTAL
+                    phase2_win_burst.clear()
+                phase2_pending_outcome = None
+            else:
+                if not lose_sfx_played:
+                    play_sfx("lose")
+                    lose_sfx_played = True
+                phase2_passed_challenge = False
+                contract_eval_passed = False
+                game_over_from_contract_eval = True
+                phase2_pending_outcome = None
+                mode = "over"
+
+        # Win celebration update: spawn + simulate many bouncing deck cards.
+        if mode == "phase2" and phase2_subphase == "celebrate":
+            spawn_rate = 3  # cards per frame
+            for _ in range(spawn_rate):
+                vx = rng.uniform(-3.6, 3.6)
+                vy = rng.uniform(-9.0, -4.5)
+                spin = rng.uniform(-8.5, 8.5)
+                scale = rng.uniform(0.85, 1.2)
+                phase2_win_burst.append((LOW_W / 2, LOW_H - 24, vx, vy, spin, 0.0, scale, 255.0))
+            g = 0.28
+            updated: List[Tuple[float, float, float, float, float, float, float, float]] = []
+            for x, y, vx, vy, spin, rot, scale, alpha in phase2_win_burst:
+                x += vx
+                y += vy
+                vy += g
+                rot += spin
+                alpha -= 1.0
+                # Bounce off side walls.
+                if x < -40:
+                    x = -40
+                    vx = abs(vx) * 0.9
+                elif x > LOW_W + 40:
+                    x = LOW_W + 40
+                    vx = -abs(vx) * 0.9
+                # Bounce from "floor" near bottom edge.
+                floor_y = LOW_H - 6
+                if y > floor_y:
+                    y = floor_y
+                    vy = -abs(vy) * 0.72
+                if alpha > 8:
+                    updated.append((x, y, vx, vy, spin, rot, scale, alpha))
+            # Keep buffer bounded.
+            phase2_win_burst = updated[-220:]
+            if phase2_win_celebrate_frames > 0:
+                phase2_win_celebrate_frames -= 1
+            if phase2_win_celebrate_frames <= 0:
+                phase2_passed_challenge = True
+                contract_eval_passed = True
+                game_over_from_contract_eval = True
+                phase2_subphase = ""
+                phase2_win_burst.clear()
+                mode = "over"
 
         if headless:
             headless_frames += 1

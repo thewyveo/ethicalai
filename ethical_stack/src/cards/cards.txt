@@ -22,9 +22,9 @@ A,w,"human_oversight",common
 22,r,"batch_processing",rare
 23,w,"feature_engineering",rare
 24,w,"ab_testing",common
-25,.,"reward_hacking",common
-26,.,"hallucination",cursed
-27,.,"fine_tuning",rare
-28,.,"ontology_integration",common
-29,.,"cross_validation",common
-30,.,"catastrophic_forgetting",cursed
+25,w,"reward_hacking",common
+26,r,"hallucination",cursed
+27,w,"fine_tuning",rare
+28,r,"ontology_integration",common
+29,w,"cross_validation",common
+30,r,"catastrophic_forgetting",cursed

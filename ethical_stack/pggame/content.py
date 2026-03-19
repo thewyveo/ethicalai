@@ -379,13 +379,57 @@ def apply_condition_passives_end_of_round(state: State) -> None:
                 state.batch_processing_bonus += amount
 
 
+# Target probability per draw for each rarity (renormalized if a tier is exhausted mid-deck).
+_RARITY_DRAW_WEIGHTS: Tuple[Tuple[str, float], ...] = (
+    ("common", 0.45),
+    ("rare", 0.25),
+    ("epic", 0.15),
+    ("cursed", 0.15),
+)
+
+
 def get_deck_for_round(rng: random.Random, round_idx: int, cards_pool: Optional[List[Card]] = None) -> List[Card]:
-    """Return a shuffled deck for the round. If cards_pool is provided, use it; otherwise return empty (caller must load via load_cards_from_file)."""
-    if cards_pool:
-        out = list(cards_pool)
-        rng.shuffle(out)
-        return out
-    return []
+    """
+    Build the round deck from cards_pool: same cards as the pool, one each, without replacement.
+    Draw order (top of stack = last list element, popped first) is chosen so each position
+    picks a rarity with weights 45% common, 25% rare, 15% epic, 15% cursed among cards
+    still available in that tier; empty tiers drop out and weights renormalize.
+    """
+    del round_idx  # reserved for future per-round variation
+    if not cards_pool:
+        return []
+
+    by_rarity: Dict[str, List[Card]] = {"common": [], "rare": [], "epic": [], "cursed": []}
+    for c in cards_pool:
+        r = str(getattr(c, "rarity", "common") or "common").lower()
+        if r not in by_rarity:
+            r = "common"
+        by_rarity[r].append(c)
+    for bucket in by_rarity.values():
+        rng.shuffle(bucket)
+
+    remaining: Dict[str, List[Card]] = {k: list(v) for k, v in by_rarity.items()}
+    total = sum(len(v) for v in remaining.values())
+    draw_sequence: List[Card] = []
+
+    while total > 0:
+        tiers: List[str] = []
+        weights: List[float] = []
+        for tier, w in _RARITY_DRAW_WEIGHTS:
+            if remaining[tier]:
+                tiers.append(tier)
+                weights.append(w)
+        if not tiers:
+            break
+        wsum = sum(weights)
+        tier = rng.choices(tiers, weights=[w / wsum for w in weights], k=1)[0]
+        bucket = remaining[tier]
+        card = bucket.pop(rng.randrange(len(bucket)))
+        draw_sequence.append(card)
+        total -= 1
+
+    # Stack: pop() returns last element = first draw of the round.
+    return list(reversed(draw_sequence))
 
 
 # --- Phase 2: post-contract AI challenge (play a card to answer) ---
