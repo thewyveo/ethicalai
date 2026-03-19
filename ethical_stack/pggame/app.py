@@ -4,7 +4,7 @@ import os
 import random
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pygame
 
@@ -18,6 +18,7 @@ from ethical_stack.pggame.content import (
     get_contract_requirements,
     get_contracts,
     get_deck_for_round,
+    pick_phase2_questions,
     get_final_stage_intro,
     get_final_stage_outcome,
     get_final_stage_questions,
@@ -57,7 +58,7 @@ class Button:
     enabled: bool = True
 
 
-def run_game(seed: int | None = None, headless: bool = False) -> None:
+def run_game(seed: int | None = None, headless: bool = False, admin_phase2: bool = False) -> None:
     """
     Run the graphical game.
 
@@ -66,7 +67,7 @@ def run_game(seed: int | None = None, headless: bool = False) -> None:
     """
     try:
         pygame.init()
-        _run(seed=seed, headless=headless)
+        _run(seed=seed, headless=headless, admin_phase2=admin_phase2)
     except Exception:
         # Retry once with dummy drivers (no real window).
         try:
@@ -76,12 +77,12 @@ def run_game(seed: int | None = None, headless: bool = False) -> None:
         os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
         os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
         pygame.init()
-        _run(seed=seed, headless=True)
+        _run(seed=seed, headless=True, admin_phase2=admin_phase2)
     finally:
         pygame.quit()
 
 
-def _run(seed: int | None = None, headless: bool = False) -> None:
+def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = False) -> None:
     rng = random.Random(seed)
 
     window = pygame.display.set_mode((W, H))
@@ -139,6 +140,25 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
     _pggame_dir = os.path.dirname(os.path.abspath(__file__))
     _src_dir = os.path.join(_pggame_dir, "..", "src")
     CARD_W, CARD_H = 80, 104
+    # Phase 2: base size multiplier; actual target size is dynamic so cards fit.
+    PHASE2_BASE_SCALE = 1.58
+    PHASE2_BASE_W, PHASE2_BASE_H = int(CARD_W * PHASE2_BASE_SCALE), int(CARD_H * PHASE2_BASE_SCALE)
+    _PHASE2_BASE_ASPECT = PHASE2_BASE_H / float(PHASE2_BASE_W) if PHASE2_BASE_W else 1.0
+
+    # Phase 2 top UI layout (green container, golden divider, strike on right 10%).
+    PHASE2_UI_X = 16
+    PHASE2_UI_Y = 12
+    PHASE2_UI_W = LOW_W - 32
+    PHASE2_UI_H = 128
+    PHASE2_UI_LEFT_W = int(PHASE2_UI_W * 0.9)
+    PHASE2_UI_DIV_X = PHASE2_UI_X + PHASE2_UI_LEFT_W
+    PHASE2_UI_CROSS_CENTER = (
+        PHASE2_UI_DIV_X + (PHASE2_UI_W - PHASE2_UI_LEFT_W) // 2,
+        PHASE2_UI_Y + 52,
+    )
+    PHASE2_UI_QUESTION_TEXT_X = PHASE2_UI_X + 12
+    PHASE2_UI_QUESTION_TEXT_Y = PHASE2_UI_Y + 30
+    PHASE2_PLAY_TARGET = (PHASE2_UI_X + PHASE2_UI_LEFT_W // 2, PHASE2_UI_Y + 80)
     card_art_surfs: Dict[str, pygame.Surface] = {}
     _cards_dir = os.path.join(_src_dir, "cards")
     if os.path.isdir(_cards_dir):
@@ -225,9 +245,47 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
     menu_play_rect: Optional[pygame.Rect] = None
     menu_credits_rect: Optional[pygame.Rect] = None
     menu_settings_rect: Optional[pygame.Rect] = None
+    menu_admin_rect: Optional[pygame.Rect] = None
     credits_back_rect: Optional[pygame.Rect] = None
     contract_eval_passed: bool = False
     game_over_from_contract_eval: bool = False
+    # Phase 2: post-contract card quiz (only if contract met at end of round 10).
+    phase2_played: bool = False
+    phase2_passed_challenge: bool = False
+    phase2_cards: List[Card] = []
+    phase2_start_centers: List[Tuple[int, int]] = []
+    phase2_anim_progress: float = 0.0
+    PHASE2_ANIM_FRAMES = 52
+    phase2_subphase: str = ""  # anim | play | won | lost
+    phase2_questions: List[Dict[str, Any]] = []
+    phase2_q_index: int = 0
+    phase2_strikes: int = 0
+    phase2_correct: int = 0
+    phase2_used: List[bool] = []
+    phase2_target_w: int = PHASE2_BASE_W
+    phase2_target_h: int = PHASE2_BASE_H
+    # Cache for scaled art at different intermediate sizes during animation.
+    # Key = (art_filename, w, h)
+    phase2_scaled_art_cache: Dict[Tuple[str, int, int], pygame.Surface] = {}
+    phase2_hover_i: Optional[int] = None
+    phase2_end_panel_rect: Optional[pygame.Rect] = None
+    # When the player answers a question correctly, the played card is animated
+    # (thrown toward the question and faded away). Kept separate from `phase2_used`.
+    phase2_play_anims: List[Tuple[int, pygame.Rect, float, Tuple[int, int]]] = []
+    PHASE2_PLAY_ANIM_FRAMES = 26
+
+    # Active row geometry (used by end_round snapshot and draw_active_row).
+    ACTIVE_CARD_W, ACTIVE_CARD_H = int(40 * 1.07), int(52 * 1.07)
+    active_gap = 6
+
+    def active_slot_rects() -> List[pygame.Rect]:
+        cap = get_active_slot_capacity(state)
+        total_w = cap * ACTIVE_CARD_W + (cap - 1) * active_gap
+        start_x = LOW_W - total_w - active_margin_right
+        return [
+            pygame.Rect(start_x + i * (ACTIVE_CARD_W + active_gap), active_slot_y, ACTIVE_CARD_W, ACTIVE_CARD_H)
+            for i in range(cap)
+        ]
 
     def draw_from_deck(n: int) -> None:
         nonlocal deck, hand
@@ -312,6 +370,9 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
 
     def end_round() -> None:
         nonlocal message, story_line, mode, contract_eval_passed, game_over_from_contract_eval
+        nonlocal phase2_played, phase2_passed_challenge, phase2_cards, phase2_start_centers
+        nonlocal phase2_anim_progress, phase2_subphase, phase2_questions, phase2_q_index
+        nonlocal phase2_strikes, phase2_correct, phase2_used, phase2_scaled_art_cache
         if hard_loss():
             mode = "over"
             return
@@ -325,9 +386,50 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         if state.round_idx < state.rounds_total:
             state.round_idx += 1
             if state.round_idx == 11:
-                contract_eval_passed = contract_fulfilled(state, state.scenario_key)
-                game_over_from_contract_eval = True
-                mode = "over"
+                contract_ok = contract_fulfilled(state, state.scenario_key)
+                contract_eval_passed = contract_ok
+                if not contract_ok:
+                    phase2_played = False
+                    phase2_passed_challenge = False
+                    game_over_from_contract_eval = True
+                    mode = "over"
+                    return
+                # Contract satisfied → Phase 2 (readiness quiz with active cards).
+                phase2_played = True
+                phase2_passed_challenge = False
+                phase2_cards = []
+                phase2_start_centers = []
+                cap = get_active_slot_capacity(state)
+                slot_rects = active_slot_rects()
+                for i in range(cap):
+                    c = state.active_slots[i] if i < len(state.active_slots) else None
+                    if c is not None:
+                        phase2_cards.append(c)
+                        phase2_start_centers.append((slot_rects[i].centerx, slot_rects[i].centery))
+                if not phase2_cards:
+                    phase2_passed_challenge = True
+                    game_over_from_contract_eval = True
+                    mode = "over"
+                    return
+                pk = {c.key for c in phase2_cards}
+                desired_q = 6 if "carbon_footprint" in pk else 5
+                desired_q = min(desired_q, len(phase2_cards))
+                phase2_questions = pick_phase2_questions(rng, pk, desired_q)
+                if not phase2_questions:
+                    phase2_passed_challenge = True
+                    game_over_from_contract_eval = True
+                    mode = "over"
+                    return
+                phase2_anim_progress = 0.0
+                phase2_subphase = "anim"
+                phase2_q_index = 0
+                phase2_strikes = 0
+                phase2_correct = 0
+                phase2_used = [False] * len(phase2_cards)
+                phase2_scaled_art_cache.clear()
+                phase2_play_anims.clear()
+                game_over_from_contract_eval = False
+                mode = "phase2"
                 return
             start_round()
             mode = "game"
@@ -460,6 +562,206 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             lines.append(" ".join(current))
         return lines
 
+    def _phase2_ease(t: float) -> float:
+        t = max(0.0, min(1.0, t))
+        return t * t * (3.0 - 2.0 * t)
+
+    def _phase2_compute_target_layout(n: int) -> Tuple[int, int, int, List[Tuple[int, int]]]:
+        """
+        Returns: (target_w, target_h, gap, end_centers).
+        Target size is dynamic to prevent overflow when the player has 5–6 cards.
+        """
+        if n <= 0:
+            return 0, 0, 0, []
+
+        # Wider spacing for 4–5 cards; tighter when we have 6.
+        gap = 12 if n >= 5 else 14
+        pad_x = 18
+        max_total_w = max(1, LOW_W - pad_x * 2)
+        w_max = max(1, (max_total_w - (n - 1) * gap) // n)
+
+        w = min(PHASE2_BASE_W, w_max)
+        # Keep it slightly bigger than Phase 1 hand cards where possible.
+        min_w = int(CARD_W * 1.1)
+        w = min(max(w, min_w), w_max)
+        h = max(1, int(w * _PHASE2_BASE_ASPECT))
+
+        # Middle-ish, but slightly lower to leave room for the question text.
+        target_cy = LOW_H // 2 + 45
+
+        total_w = n * w + (n - 1) * gap
+        x0 = (LOW_W - total_w) // 2 + w // 2
+        centers = [(x0 + i * (w + gap), target_cy) for i in range(n)]
+        return w, h, gap, centers
+
+    def _phase2_get_scaled_art(art_key: str, w: int, h: int) -> pygame.Surface:
+        """Scale from the cached 80×104 art; quantize sizes to keep the cache small."""
+        # Quantize to 2px steps.
+        wq = int(max(1, round(w / 2) * 2))
+        hq = int(max(1, round(h / 2) * 2))
+        key = (art_key, wq, hq)
+        surf = phase2_scaled_art_cache.get(key)
+        if surf is None:
+            surf = pygame.transform.smoothscale(card_art_surfs[art_key], (wq, hq))
+            phase2_scaled_art_cache[key] = surf
+        return surf
+
+    def phase2_card_layout_rects() -> List[pygame.Rect]:
+        n = len(phase2_cards)
+        if n == 0:
+            return []
+
+        target_w, target_h, _, ends = _phase2_compute_target_layout(n)
+        # During play, we want the stable end positions.
+        t_anim = _phase2_ease(phase2_anim_progress) if phase2_subphase == "anim" else 1.0
+
+        out: List[pygame.Rect] = []
+        for i in range(n):
+            sx, sy = phase2_start_centers[i]
+            ex, ey = ends[i]
+            cx = int(sx + (ex - sx) * t_anim)
+            cy = int(sy + (ey - sy) * t_anim)
+            w = int(ACTIVE_CARD_W + (target_w - ACTIVE_CARD_W) * t_anim)
+            h = int(ACTIVE_CARD_H + (target_h - ACTIVE_CARD_H) * t_anim)
+            out.append(pygame.Rect(cx - w // 2, cy - h // 2, w, h))
+        return out
+
+    def draw_phase2() -> None:
+        nonlocal phase2_end_panel_rect
+        draw_tiled_background()
+        phase2_end_panel_rect = None
+
+        # Top UI: green container for the question + right-side strike strip.
+        ui_panel = pygame.Rect(PHASE2_UI_X, PHASE2_UI_Y, PHASE2_UI_W, PHASE2_UI_H)
+        draw_pixel_border_alpha(screen, ui_panel, FELT_DARK, GOLD, fill_alpha=235)
+
+        # Golden pixel divider between question area (left) and strike area (right).
+        for yy in range(PHASE2_UI_Y + 10, PHASE2_UI_Y + PHASE2_UI_H - 10, 6):
+            pygame.draw.rect(
+                screen,
+                GOLD,
+                pygame.Rect(PHASE2_UI_DIV_X - 1, yy, 3, 3),
+            )
+
+        nq = len(phase2_questions)
+
+        # Question text (top-left, ~90% width).
+        if nq > 0 and phase2_subphase in ("play", "anim") and phase2_q_index < nq:
+            q = phase2_questions[phase2_q_index]
+            counter = rtxt(
+                font_tiny,
+                f"Question {phase2_q_index + 1} of {nq}",
+                GOLD,
+                bold_px=0,
+            )
+            screen.blit(counter, (PHASE2_UI_QUESTION_TEXT_X, PHASE2_UI_Y + 6))
+
+            qy = PHASE2_UI_QUESTION_TEXT_Y
+            qtext = str(q.get("question", ""))
+            parts = qtext.split("\n")
+            for pi, part in enumerate(parts):
+                for line in wrap_text(part, PHASE2_UI_LEFT_W - 24):
+                    qt = rtxt(font_small, line, PAPER, bold_px=0)
+                    screen.blit(qt, (PHASE2_UI_QUESTION_TEXT_X, qy))
+                    qy += font_small.get_linesize() + 3
+                if pi < len(parts) - 1:
+                    qy += 2
+
+        # Strike indicator (first wrong answer): red cross on the right 10%.
+        if phase2_strikes >= 1 and phase2_subphase in ("play", "anim"):
+            cx, cy = PHASE2_UI_CROSS_CENTER
+            L = 12
+            pygame.draw.line(screen, RED, (cx - L, cy - L), (cx + L, cy + L), 3)
+            pygame.draw.line(screen, RED, (cx - L, cy + L), (cx + L, cy - L), 3)
+            lc = rtxt(font_tiny, "Last chance!", RED, bold_px=0)
+            screen.blit(lc, (cx - lc.get_width() // 2, cy + L + 6))
+
+        rects = phase2_card_layout_rects()
+        for i, card in enumerate(phase2_cards):
+            if i >= len(rects):
+                break
+            if i < len(phase2_used) and phase2_used[i]:
+                # Correctly played cards are animated away.
+                continue
+            r = rects[i]
+            outer = card_border_color(card)
+            hovered = phase2_hover_i == i and phase2_subphase == "play"
+
+            if hovered:
+                # Reuse the original "active card wobble": rotate the whole card.
+                angle = math.sin((frame * 0.22) + i * 1.1) * 2.0
+                lift_y = -4
+                wobble_scale = 1.03
+                card_surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+                if card.art and card.art in card_art_surfs:
+                    art_surf = _phase2_get_scaled_art(card.art, r.w, r.h)
+                    card_surf.blit(art_surf, (0, 0))
+                    draw_pixel_frame(card_surf, pygame.Rect(0, 0, r.w, r.h), outer, PAPER_DARK)
+                else:
+                    draw_pixel_border(card_surf, pygame.Rect(0, 0, r.w, r.h), PAPER, outer)
+                    pip = rtxt(font_small, card.suit[0].upper(), outer, bold_px=0)
+                    card_surf.blit(pip, (4, 3))
+                rotated = pygame.transform.rotozoom(card_surf, angle, wobble_scale)
+                screen.blit(rotated, rotated.get_rect(center=(r.centerx, r.centery + lift_y)))
+            else:
+                if card.art and card.art in card_art_surfs:
+                    art_surf = _phase2_get_scaled_art(card.art, r.w, r.h)
+                    screen.blit(art_surf, r)
+                    draw_pixel_frame(screen, r, outer, PAPER_DARK)
+                else:
+                    draw_pixel_border(screen, r, PAPER, outer)
+                    pip = rtxt(font_small, card.suit[0].upper(), outer, bold_px=0)
+                    screen.blit(pip, (r.x + 6, r.y + 5))
+
+        # Played-card "throw & fade" animations.
+        for card_idx, start_r, prog, target_center in phase2_play_anims:
+            if card_idx < 0 or card_idx >= len(phase2_cards):
+                continue
+            card = phase2_cards[card_idx]
+            outer = card_border_color(card)
+
+            t = max(0.0, min(1.0, prog))
+            ease = _phase2_ease(t)
+            arc_h = int(start_r.h * 0.45)
+            xc = int(start_r.centerx + (target_center[0] - start_r.centerx) * ease)
+            yc = int(start_r.centery + (target_center[1] - start_r.centery) * ease - arc_h * math.sin(math.pi * ease))
+            rot = math.sin(math.pi * ease) * 10.0
+            pop_scale = 1.0 + 0.08 * math.sin(math.pi * ease)
+            alpha = int(255 * (1.0 - ease) ** 1.2)
+
+            # Render the card into a surface once per frame (small N so it's fine).
+            base = pygame.Surface((start_r.w, start_r.h), pygame.SRCALPHA)
+            if card.art and card.art in card_art_surfs:
+                art_surf = _phase2_get_scaled_art(card.art, start_r.w, start_r.h)
+                base.blit(art_surf, (0, 0))
+                draw_pixel_frame(base, pygame.Rect(0, 0, start_r.w, start_r.h), outer, PAPER_DARK)
+            else:
+                draw_pixel_border(base, pygame.Rect(0, 0, start_r.w, start_r.h), PAPER, outer)
+                pip = rtxt(font_small, card.suit[0].upper(), outer, bold_px=0)
+                base.blit(pip, (4, 3))
+
+            animated = pygame.transform.rotozoom(base, rot, pop_scale)
+            animated.set_alpha(max(0, min(255, alpha)))
+            screen.blit(animated, animated.get_rect(center=(xc, yc)))
+
+        if phase2_subphase in ("won", "lost"):
+            panel = pygame.Rect(32, LOW_H // 2 - 52, LOW_W - 64, 104)
+            phase2_end_panel_rect = panel
+            draw_pixel_border_alpha(screen, panel, FELT_DARK, GOLD, fill_alpha=245)
+            if phase2_subphase == "won":
+                title = rtxt(font_big, "READINESS PASSED", GOLD)
+                sub = rtxt(font_small, "Click to see deployment outcome.", PAPER, bold_px=0)
+            else:
+                title = rtxt(font_big, "READINESS FAILED", RED)
+                sub = rtxt(
+                    font_small,
+                    "Too many wrong answers. Click to continue.",
+                    PAPER,
+                    bold_px=0,
+                )
+            screen.blit(title, (panel.centerx - title.get_width() // 2, panel.y + 18))
+            screen.blit(sub, (panel.centerx - sub.get_width() // 2, panel.y + 52))
+
     def draw_message() -> None:
         # Line 1: Objective: [name]
         # Line 2: short setting/context (very concise)
@@ -545,30 +847,56 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         y += line_step
 
         # Line 2: full stat names in hover only (e.g. -1 Stability, +2 Automation)
-        active = get_active_stats(state.round_idx)
-        full_names = {"transparency": "Transparency", "stability": "Stability", "automation": "Automation", "generalizability": "Generalizability", "integrity": "Integrity"}
-        tokens: List[Tuple[str, Tuple[int, int, int]]] = []
-        for key in active:
-            v = int(c.effects.get(key, 0))
-            if v:
-                name = full_names.get(key, key.replace("_", " ").title())
-                tokens.append((f"{v:+d} {name}", pos_c if v > 0 else neg_c))
-        if tokens:
-            cx = x
-            for i, (tok, col) in enumerate(tokens):
-                if i > 0:
-                    comma = rtxt(font_tiny, ", ", neutral_c, bold_px=0)
-                    comma.set_colorkey((0, 0, 0))
-                    screen.blit(comma, (cx, y))
-                    cx += comma.get_width()
-                surf = rtxt(font_tiny, tok, col, bold_px=0)
-                surf.set_colorkey((0, 0, 0))
-                screen.blit(surf, (cx, y))
-                cx += surf.get_width()
+        if getattr(c, "key", None) == "carbon_footprint":
+            # Custom formatting requested for this specific card.
+            integ_v = int((c.effects or {}).get("integrity", 0))
+            token1 = f"{integ_v:+d} Integrity" if integ_v != 0 else "Integrity"
+            t1 = rtxt(font_tiny, token1, neg_c if integ_v < 0 else pos_c, bold_px=0)
+            t1.set_colorkey((0, 0, 0))
+            screen.blit(t1, (x, y))
+            cx = x + t1.get_width()
+            space = rtxt(font_tiny, " ", neutral_c, bold_px=0)
+            space.set_colorkey((0, 0, 0))
+            screen.blit(space, (cx, y))
+            cx += space.get_width()
+            t2 = rtxt(font_tiny, "+1 Active Slot", pos_c, bold_px=0)
+            t2.set_colorkey((0, 0, 0))
+            screen.blit(t2, (cx, y))
             y += line_step
+        else:
+            active = get_active_stats(state.round_idx)
+            full_names = {
+                "transparency": "Transparency",
+                "stability": "Stability",
+                "automation": "Automation",
+                "generalizability": "Generalizability",
+                "integrity": "Integrity",
+            }
+            tokens: List[Tuple[str, Tuple[int, int, int]]] = []
+            for key in active:
+                v = int(c.effects.get(key, 0))
+                if v:
+                    name = full_names.get(key, key.replace("_", " ").title())
+                    tokens.append((f"{v:+d} {name}", pos_c if v > 0 else neg_c))
+            if tokens:
+                cx = x
+                for i, (tok, col) in enumerate(tokens):
+                    if i > 0:
+                        comma = rtxt(font_tiny, ", ", neutral_c, bold_px=0)
+                        comma.set_colorkey((0, 0, 0))
+                        screen.blit(comma, (cx, y))
+                        cx += comma.get_width()
+                    surf = rtxt(font_tiny, tok, col, bold_px=0)
+                    surf.set_colorkey((0, 0, 0))
+                    screen.blit(surf, (cx, y))
+                    cx += surf.get_width()
+                y += line_step
 
         # Line 3: card text (setting/gameplay hint). Show for every card, not only passives.
-        c_text = (getattr(c, "text", "") or "").strip()
+        if getattr(c, "key", None) == "carbon_footprint":
+            c_text = "Resource overuse. You will be judged."
+        else:
+            c_text = (getattr(c, "text", "") or "").strip()
         if c_text:
             for line in wrap_text(c_text, max_w):
                 bl = rtxt(font_tiny, line, neutral_c, bold_px=0)
@@ -775,19 +1103,6 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
     deck_anim_frames = 0
     trash_flash_frames = 0
 
-    # Active row: 5 or 6 slots (6 when carbon_footprint in active)
-    ACTIVE_CARD_W, ACTIVE_CARD_H = int(40 * 1.07), int(52 * 1.07)
-    active_gap = 6
-
-    def active_slot_rects() -> List[pygame.Rect]:
-        cap = get_active_slot_capacity(state)
-        total_w = cap * ACTIVE_CARD_W + (cap - 1) * active_gap
-        start_x = LOW_W - total_w - active_margin_right
-        return [
-            pygame.Rect(start_x + i * (ACTIVE_CARD_W + active_gap), active_slot_y, ACTIVE_CARD_W, ACTIVE_CARD_H)
-            for i in range(cap)
-        ]
-
     # Drag state: hand index or active index being dragged; card follows mouse until drop (trash or active slot).
     dragging_hand_idx: Optional[int] = None
     dragging_active_idx: Optional[int] = None
@@ -978,7 +1293,7 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         screen.blit(tip, (14, LOW_H - 20))
 
     def draw_menu() -> None:
-        nonlocal menu_play_rect, menu_credits_rect, menu_settings_rect
+        nonlocal menu_play_rect, menu_credits_rect, menu_settings_rect, menu_admin_rect
         draw_tiled_background()
         draw_pixel_border(screen, pygame.Rect(8, 8, LOW_W - 16, LOW_H - 16), FELT_DARK, GOLD)
         # Title (placeholder; user will upload image later)
@@ -1004,6 +1319,12 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         draw_pixel_border(screen, menu_settings_rect, FELT_DARK, GOLD)
         stxt = rtxt(font_small, "Settings", PAPER)
         screen.blit(stxt, (menu_settings_rect.centerx - stxt.get_width() // 2, menu_settings_rect.centery - stxt.get_height() // 2))
+        # Admin Phase 2 test button
+        admin_y = set_y + btn_h + 12
+        menu_admin_rect = pygame.Rect(cx - btn_w // 2, admin_y, btn_w, btn_h)
+        draw_pixel_border(screen, menu_admin_rect, GOLD, (80, 70, 40))
+        atxt = rtxt(font_small, "Admin Phase2", INK)
+        screen.blit(atxt, (menu_admin_rect.centerx - atxt.get_width() // 2, menu_admin_rect.centery - atxt.get_height() // 2))
         esc = rtxt(font_small, "ESC to quit", (160, 158, 148), bold_px=0)
         screen.blit(esc, (LOW_W - esc.get_width() - 12, LOW_H - 20))
 
@@ -1052,7 +1373,14 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         if game_over_from_contract_eval:
             failed = not contract_eval_passed
             msg = "DEPLOYMENT APPROVED" if contract_eval_passed else "DEPLOYMENT DENIED"
-            sub = "You met the contract requirements." if contract_eval_passed else "You did not meet the deployment contract requirements."
+            if phase2_played and contract_eval_passed and phase2_passed_challenge:
+                sub = "You met the contract and passed the final AI readiness review."
+            elif phase2_played and not contract_eval_passed:
+                sub = "You satisfied the deployment contract but failed the readiness challenge."
+            elif contract_eval_passed:
+                sub = "You met the contract requirements."
+            else:
+                sub = "You did not meet the deployment contract requirements."
             title_color = GOLD if contract_eval_passed else RED
         else:
             failed = constraint_failed or hard_loss()
@@ -1146,8 +1474,68 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         esc = font_small.render("Press ESC to quit.", True, GOLD)
         screen.blit(esc, ((LOW_W - esc.get_width()) // 2, LOW_H - 28))
 
+    def start_admin_phase2() -> None:
+        nonlocal mode, phase2_played, phase2_passed_challenge, phase2_cards, phase2_start_centers
+        nonlocal phase2_anim_progress, phase2_subphase, phase2_questions, phase2_q_index
+        nonlocal phase2_strikes, phase2_correct, phase2_used, phase2_scaled_art_cache, phase2_play_anims
+        nonlocal phase2_hover_i, phase2_end_panel_rect, contract_eval_passed, game_over_from_contract_eval
+
+        # Curated active set for Phase 2 testing (up to 6 slots).
+        admin_keys = [
+            "explainable_documentation",
+            "human_in_the_loop",
+            "bias_fairness",
+            "data_privacy",
+            "robustness_testing",
+            "carbon_footprint",
+        ]
+
+        # Clear & seed ACTIVE cards.
+        state.active_slots = [None] * 6
+        cards_by_key: Dict[str, Card] = {c.key: c for c in cards_pool}
+        for i, k in enumerate(admin_keys[: len(state.active_slots)]):
+            state.active_slots[i] = cards_by_key.get(k)
+
+        recompute_stats_from_active(state)
+
+        phase2_played = True
+        phase2_passed_challenge = False
+        phase2_cards = []
+        phase2_start_centers = []
+        phase2_q_index = 0
+        phase2_strikes = 0
+        phase2_correct = 0
+        phase2_used = []
+        phase2_scaled_art_cache.clear()
+        phase2_play_anims.clear()
+        phase2_hover_i = None
+        phase2_end_panel_rect = None
+        phase2_anim_progress = 0.0
+        phase2_subphase = "anim"
+
+        cap = get_active_slot_capacity(state)
+        slot_rects = active_slot_rects()
+        for i in range(cap):
+            c = state.active_slots[i] if i < len(state.active_slots) else None
+            if c is not None:
+                phase2_cards.append(c)
+                phase2_start_centers.append((slot_rects[i].centerx, slot_rects[i].centery))
+
+        pk = {c.key for c in phase2_cards}
+        desired_q = 6 if "carbon_footprint" in pk else 5
+        desired_q = min(desired_q, len(phase2_cards))
+        phase2_questions = pick_phase2_questions(rng, pk, desired_q)
+        phase2_used = [False] * len(phase2_cards)
+
+        contract_eval_passed = False
+        game_over_from_contract_eval = False
+
+        mode = "phase2"
+
     # Start in menu; start_round() is called when leaving menu (Play -> intro)
-    if mode != "menu":
+    if admin_phase2:
+        start_admin_phase2()
+    elif mode != "menu":
         start_round()
 
     clock = pygame.time.Clock()
@@ -1177,6 +1565,8 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                         mode = "intro"
                     elif menu_credits_rect and menu_credits_rect.collidepoint(mouse_low):
                         mode = "credits"
+                    elif menu_admin_rect and menu_admin_rect.collidepoint(mouse_low):
+                        start_admin_phase2()
                     # Settings: placeholder, no-op
                     continue
                 if mode == "credits" and credits_back_rect and credits_back_rect.collidepoint(mouse_low):
@@ -1188,6 +1578,50 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                     message = "Click deck to draw & advance. Max 5 in hand. Active cards = your stats."
                     mode = "game"
                     continue
+                if mode == "phase2":
+                    if phase2_subphase in ("won", "lost"):
+                        pr = phase2_end_panel_rect
+                        if pr is None or pr.collidepoint(mouse_low):
+                            won = phase2_subphase == "won"
+                            phase2_passed_challenge = won
+                            contract_eval_passed = won
+                            game_over_from_contract_eval = True
+                            mode = "over"
+                    elif phase2_subphase == "play" and phase2_q_index < len(phase2_questions):
+                        # Don't allow multiple answers while a played-card cleanup animation is running.
+                        if phase2_play_anims:
+                            continue
+                        rects = phase2_card_layout_rects()
+                        for i, cr in enumerate(rects):
+                            if i >= len(phase2_cards) or (i < len(phase2_used) and phase2_used[i]):
+                                continue
+                            if not cr.collidepoint(mouse_low):
+                                continue
+                            q = phase2_questions[phase2_q_index]
+                            acc = set(q.get("acceptable") or [])
+                            card = phase2_cards[i]
+                            if card.key in acc:
+                                phase2_correct += 1
+                                phase2_used[i] = True
+                                # Animate the played card toward the question, then fade away.
+                                # Anchor is near the question text block.
+                                phase2_play_anims.append(
+                                    (i, cr.copy(), 0.0, PHASE2_PLAY_TARGET)
+                                )
+                                phase2_q_index += 1
+                                n = len(phase2_questions)
+                                if phase2_q_index >= n:
+                                    need = max(0, n - 1)
+                                    if phase2_correct >= need:
+                                        phase2_subphase = "won"
+                                    else:
+                                        phase2_subphase = "lost"
+                            else:
+                                phase2_strikes += 1
+                                if phase2_strikes >= 2:
+                                    phase2_subphase = "lost"
+                            break
+                    continue
                 if mode == "over" and game_over_retry_rect and game_over_retry_rect.collidepoint(mouse_low):
                     state = State()
                     deck, discard, collected, hand = [], [], [], []
@@ -1197,6 +1631,16 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                     constraint_failed = False
                     game_over_from_contract_eval = False
                     contract_eval_passed = False
+                    phase2_played = False
+                    phase2_passed_challenge = False
+                    phase2_cards.clear()
+                    phase2_start_centers.clear()
+                    phase2_questions.clear()
+                    phase2_used.clear()
+                    phase2_scaled_art_cache.clear()
+                    phase2_play_anims.clear()
+                    phase2_subphase = ""
+                    phase2_anim_progress = 0.0
                     hidden_hand_index = None
                     mode = "menu"
                     collect_anim_list.clear()
@@ -1216,6 +1660,10 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                     else:
                         deck_draw_start_hand_len = len(hand)
                         deck_draw_start_had_black_box = any(c and c.key == "black_box_model" for c in state.active_slots)
+                        # Black box: pick the first card slot to face-down immediately.
+                        # This prevents the first newly appended card from flashing face-up
+                        # during the multi-step draw animation.
+                        hidden_hand_index = deck_draw_start_hand_len if deck_draw_start_had_black_box else None
                         deck_draw_buffer = []
                         for _ in range(draw_per_round):
                             if len(deck_draw_buffer) >= draw_per_round:
@@ -1355,7 +1803,16 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         hover_idx = None
         hover_active_idx = None
         hover_peek_card = None
-        if mode == "game" and dragging_hand_idx is None and dragging_active_idx is None:
+        phase2_hover_i = None
+        if mode == "phase2" and phase2_subphase == "play":
+            rects = phase2_card_layout_rects()
+            for i, cr in enumerate(rects):
+                if i < len(phase2_used) and phase2_used[i]:
+                    continue
+                if cr.collidepoint(mouse_low):
+                    phase2_hover_i = i
+                    break
+        elif mode == "game" and dragging_hand_idx is None and dragging_active_idx is None:
             if not deck_draw_in_progress:
                 # Explainable documentation: next-card preview above deck
                 has_explainable = any(c and c.key == "explainable_documentation" for c in state.active_slots)
@@ -1382,6 +1839,8 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             draw_credits()
         elif mode == "intro":
             draw_intro()
+        elif mode == "phase2":
+            draw_phase2()
         elif state.round_idx > state.rounds_total or hard_loss() or mode == "over":
             draw_game_over()
         else:
@@ -1455,12 +1914,7 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                 #   (This prevents alternating between different cards within the same round draw.)
                 # - Even if the black box model card was removed from ACTIVE, the previously hidden card
                 #   should stay hidden until this draw completes.
-                should_continue_hidden_cycle = deck_draw_start_had_black_box or hidden_hand_index is not None
-                if should_continue_hidden_cycle and deck_draw_start_hand_len < len(hand):
-                    # Always hide the first card drawn from the deck in this "next round" draw.
-                    hidden_hand_index = deck_draw_start_hand_len
-                else:
-                    hidden_hand_index = None
+                hidden_hand_index = deck_draw_start_hand_len if deck_draw_start_had_black_box and deck_draw_start_hand_len < len(hand) else None
                 deck_draw_in_progress = False
                 deck_draw_buffer = []
                 deck_anim_frames = 0
@@ -1475,6 +1929,22 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             active_slot_conflict_frames -= 1
         if pending_draw:
             pending_draw_frames += 1
+
+        if mode == "phase2" and phase2_subphase == "anim":
+            phase2_anim_progress += 1.0 / float(PHASE2_ANIM_FRAMES)
+            if phase2_anim_progress >= 1.0:
+                phase2_anim_progress = 1.0
+                phase2_subphase = "play"
+
+        # Cleanup animation: played cards fly toward the question and fade out.
+        if mode == "phase2" and phase2_play_anims:
+            for j in range(len(phase2_play_anims) - 1, -1, -1):
+                card_idx, start_r, prog, target_center = phase2_play_anims[j]
+                prog += 1.0 / float(PHASE2_PLAY_ANIM_FRAMES)
+                if prog >= 1.0:
+                    phase2_play_anims.pop(j)
+                else:
+                    phase2_play_anims[j] = (card_idx, start_r, prog, target_center)
 
         if headless:
             headless_frames += 1

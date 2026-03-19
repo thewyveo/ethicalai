@@ -17,27 +17,27 @@ def get_contracts() -> List[Dict[str, Any]]:
         {
             "key": "healthcare",
             "name": "Healthcare AI",
-            "requirements": {"transparency": 7, "stability": 6, "integrity": 8, "generalizability": 5, "automation": 4},
+            "requirements": {"transparency": 9, "stability": 6, "integrity": 8, "generalizability": 5, "automation": 2},
         },
         {
             "key": "startup",
             "name": "Startup AI",
-            "requirements": {"automation": 9, "stability": 5, "transparency": 4, "generalizability": 4, "integrity": 4},
+            "requirements": {"automation": 5, "stability": 5, "transparency": 4, "generalizability": 8, "integrity": 4},
         },
         {
             "key": "government",
             "name": "Government AI",
-            "requirements": {"transparency": 8, "integrity": 7, "stability": 6, "generalizability": 5, "automation": 4},
+            "requirements": {"transparency": 7, "integrity": 7, "stability": 6, "generalizability": 3, "automation": 4},
         },
         {
             "key": "social_media",
             "name": "Social Media Algorithm",
-            "requirements": {"automation": 8, "integrity": 6, "generalizability": 6, "transparency": 4, "stability": 4},
+            "requirements": {"automation": 8, "integrity": 5, "generalizability": 2, "transparency": 3, "stability": 5},
         },
         {
             "key": "defense",
-            "name": "Autonomous / Defense AI",
-            "requirements": {"automation": 8, "stability": 7, "integrity": 5, "transparency": 5, "generalizability": 5},
+            "name": "Defensive / Military AI",
+            "requirements": {"automation": 10, "stability": 8, "integrity": 3, "transparency": 3, "generalizability": 3},
         },
     ]
 
@@ -77,10 +77,10 @@ def get_scenario_objective_lines(contract_key: Optional[str]) -> Tuple[str, str,
         return line1, "Meet the deployment thresholds.", "Meet the deployment requirements."
 
     setting = {
-        "healthcare": "Patient safety first: raise stability & integrity.",
-        "startup": "Needs to be fast and credible: automation & integrity.",
+        "healthcare": "Patient safety first: raise stability, integrity & transparency.",
+        "startup": "Needs novelty: generalizability.",
         "government": "Reliability: emphasize transparency & integrity.",
-        "social_media": "Scale responsibly: push automation & generalizability.",
+        "social_media": "Scale responsibly: push automation, integrity & stability.",
         "defense": "Operational readiness: prioritize automation & stability.",
     }.get(contract_key, "Tune your active deck to the contract thresholds.")
 
@@ -165,7 +165,7 @@ def _card_definitions() -> Dict[str, Dict[str, Any]]:
         "human_oversight": {"name": "Human Oversight", "text": "A person can say no. Reduces automation, increases transparency.", "effects": {"automation": -1, "transparency": 1}, "passive": None},
         "full_automation": {"name": "Full Automation", "text": "No humans, maximum efficiency.", "effects": {"automation": 2, "transparency": -1, "stability": -1}, "passive": None},
         "user_communication": {"name": "User Communication", "text": "You set up support for your clients.", "effects": {"transparency": 1}, "passive": None},
-        "explainable_documentation": {"name": "Explainable Documentation", "text": "Preview 1 card from next round before drawing.", "effects": {}, "passive": {"type": "peek_next_card"}},
+        "explainable_documentation": {"name": "Explainable Documentation", "text": "Preview 1 card from next round before drawing.", "effects": {"transparency": 1, "integrity": 1}, "passive": {"type": "peek_next_card"}},
         "black_box_model": {"name": "Black Box Model", "text": "Huge automation boost. But one card hidden each round.", "effects": {"automation": 3}, "passive": {"type": "hidden_card"}},
         "human_in_the_loop": {"name": "Human in the Loop", "text": "Lowest stat when placed in active gets +5. Recomputed if moved and re-added.", "effects": {}, "passive": {"type": "lowest_stat_boost", "amount": 5}},
         "bias_fairness": {"name": "Bias Fairness", "text": "The system is evaluated for fairness across groups.", "effects": {"integrity": 2}, "passive": None},
@@ -178,13 +178,13 @@ def _card_definitions() -> Dict[str, Dict[str, Any]]:
         "regularization": {"name": "Regularization", "text": "All negative stat debuffs are capped to -1.", "effects": {}, "passive": {"type": "cap_negatives"}},
         "robustness_testing": {"name": "Robustness Testing", "text": "Varied conditions don't scare you.", "effects": {"generalizability": 1, "stability": 1}, "passive": None},
         "local_explainability": {"name": "Local Explainability", "text": "Pinpoint interpretability.", "effects": {"transparency": 1, "integrity": 1}, "passive": None},
-        "carbon_footprint": {"name": "Carbon Footprint", "text": "Resource overuse: adds an extra active slot.", "effects": {"integrity": -3}, "passive": {"type": "extra_slot"}},
+        "carbon_footprint": {"name": "Carbon Footprint", "text": "Resource overuse: adds an extra active slot. You will be judged.", "effects": {"integrity": -3}, "passive": {"type": "extra_slot"}},
         "overfitting": {"name": "Overfitting", "text": "Your model memorized the data instead of learning.", "effects": {"generalizability": -2, "integrity": -1}, "passive": None},
         "neural_network": {"name": "Neural Network", "text": "Good model, but not interpretable.", "effects": {"transparency": -3, "automation": 2, "generalizability": 1}, "passive": None},
         "linear_regression": {"name": "Linear Regression", "text": "Okay model, but not generalizable.", "effects": {"transparency": 1, "automation": 1, "generalizability": -3}, "passive": None},
         "real_time_api": {"name": "Real Time API", "text": "+1 automation each round. Can't be used with Batch Processing.", "effects": {"stability": -1, "integrity": -1}, "passive": {"type": "per_round_stat", "stat": "automation", "amount": 1}},
         "batch_processing": {"name": "Batch Processing", "text": "+1 stability each round. Can't be used with Real Time API.", "effects": {"stability": 1, "automation": -1}, "passive": {"type": "per_round_stat", "stat": "stability", "amount": 1}},
-        "feature_engineering": {"name": "Feature Engineering", "text": "One random card's stats are doubled.", "effects": {}, "passive": {"type": "chance_double_effects"}},
+        "feature_engineering": {"name": "Feature Engineering", "text": "One random card's stats are doubled.", "effects": {"automation": 1, "generalizability": -1}, "passive": {"type": "chance_double_effects"}},
         "ab_testing": {"name": "AB Testing", "text": "You conduct experiments to validate your model.", "effects": {"stability": 2, "integrity": 1}, "passive": None},
         "reward_hacking": {"name": "Reward Hacking", "text": "The model optimizes for the wrong objective.", "effects": {"automation": 1, "integrity": -1}, "passive": None},
         "hallucination": {"name": "Hallucination", "text": "Whooosh!", "effects": {"generalizability": -1, "integrity": -1}, "passive": None},
@@ -385,6 +385,460 @@ def get_deck_for_round(rng: random.Random, round_idx: int, cards_pool: Optional[
         out = list(cards_pool)
         rng.shuffle(out)
         return out
+    return []
+
+
+# --- Phase 2: post-contract AI challenge (play a card to answer) ---
+
+_PHASE2_QUESTION_POOL = [
+    {
+        "id": "q1",
+        "title": "Stakeholder Trust",
+        "context": "Stakeholders are concerned about understanding and trust.",
+        "question": "How do you respond?",
+        "acceptable": [
+            "human_oversight",
+            "user_communication",
+            "explainable_documentation",
+            "local_explainability",
+            "alignment",
+            "bias_fairness"
+        ],
+    },
+    {
+        "id": "q2",
+        "title": "Speed vs Control",
+        "context": "You need to scale quickly under pressure.",
+        "question": "What do you prioritize?",
+        "acceptable": [
+            "full_automation",
+            "real_time_api",
+            "procurement_cut",
+            "black_box_model",
+            "shadow_deployment",
+        ],
+    },
+    {
+        "id": "q3",
+        "title": "Data Sensitivity",
+        "context": "Your system handles sensitive user data.",
+        "question": "What approach do you take?",
+        "acceptable": [
+            "data_privacy",
+            "ontology_integration",
+            "local_explainability",
+        ],
+    },
+    {
+        "id": "q4",
+        "title": "Unstable Behavior",
+        "context": "The system behaves inconsistently in production.",
+        "question": "What do you do?",
+        "acceptable": [
+            "safety_risk_control",
+            "robustness_testing",
+            "batch_processing",
+            "ab_testing",
+            "regularization",
+        ],
+    },
+    {
+        "id": "q5",
+        "title": "Model Choice Tradeoff",
+        "context": "You must choose between interpretability and performance.",
+        "question": "What is a possible solution?",
+        "acceptable": [
+            "linear_regression",
+            "explainable_documentation",
+        ],
+    },
+    {
+        "id": "q6",
+        "title": "Bias Detection",
+        "context": "Your model shows biased outcomes.",
+        "question": "What action do you take?",
+        "acceptable": [
+            "bias_fairness",
+            "alignment",
+            "ontology_integration",
+        ],
+    },
+    {
+        "id": "q7",
+        "title": "Deployment Strategy",
+        "context": "You are deciding how to release a new system.",
+        "question": "What approach do you use?",
+        "acceptable": [
+            "shadow_deployment",
+            "real_time_api",
+            "batch_processing",
+            "full_automation",
+            "procurement_cut",
+            "human_in_the_loop",
+            "human_oversight",
+        ],
+    },
+    {
+        "id": "q8",
+        "title": "Overfitting Issue",
+        "context": "Your model memorizes training data and fails on new inputs.",
+        "question": "What term is applicable in this situation?",
+        "acceptable": [
+            "overfitting",
+            "regularization",
+            "cross_validation",
+            "robustness_testing",
+        ],
+    },
+    {
+        "id": "q9",
+        "title": "Misleading Outputs",
+        "context": "The model produces convincing but incorrect outputs.",
+        "question": "What is relevant in this situation?",
+        "acceptable": [
+            "hallucination",
+            "human_in_the_loop",
+            "local_explainability",
+            "robustness_testing",
+            "ab_testing",
+        ],
+    },
+    {
+        "id": "q10",
+        "title": "Long-Term Degradation",
+        "context": "Performance drops over time.",
+        "question": "What applies here?",
+        "acceptable": [
+            "model_drift",
+            "fine_tuning",
+            "cross_validation",
+            "robustness_testing",
+            "regularization",
+            "alignment",
+            "feature_engineering",
+            "ontology_integration",
+            "ab_testing",
+        ],
+    },
+    {
+        "id": "q11",
+        "title": "System Optimization",
+        "context": "You want to improve performance without redesigning the model.",
+        "question": "What do you apply?",
+        "acceptable": [
+            "feature_engineering",
+            "fine_tuning",
+            "regularization",
+            "ab_testing",
+            "cross_validation",
+            "ontology_integration",
+        ],
+    },
+    {
+        "id": "q12",
+        "title": "Resource Constraints",
+        "context": "Your system is expensive and resource-heavy.",
+        "question": "What do you adjust?",
+        "acceptable": [
+            "carbon_footprint",
+        ],
+    },
+    {
+        "id": "q13",
+        "title": "Objective Exploitation",
+        "context": "The system finds shortcuts to maximize its objective in unintended ways.",
+        "question": "What do you change/do to address this?",
+        "acceptable": [
+            "reward_hacking",
+            "human_oversight",
+            "alignment",
+            "human_in_the_loop",
+            "model_drift"
+        ],
+    },
+    {
+        "id": "q14",
+        "title": "Knowledge Loss",
+        "context": "After updates, the model forgets previously learned behavior.",
+        "question": "What is happening / what do you address?",
+        "acceptable": [
+            "catastrophic_forgetting",
+            "fine_tuning",
+        ],
+    },
+    {
+        "id": "q15",
+        "title": "Model Transparency",
+        "context": "Your model performs well, but no one understands how it works.",
+        "question": "What is your model?",
+        "acceptable": [
+            "black_box_model",
+            "neural_network",
+        ],
+    },
+    {
+        "id": "q16",
+        "title": "Deep Learning Choice",
+        "context": "You need a highly expressive model capable of capturing complex patterns in large-scale data.",
+        "question": "What model fits best here?",
+        "acceptable": [
+            "neural_network",
+        ],
+    },
+    {
+        "id": "q17",
+        "title": "Performance Decay",
+        "context": "Your model’s performance gradually worsens as real-world data shifts over time.",
+        "question": "What is happening?",
+        "acceptable": [
+            "model_drift",
+        ],
+    },
+    {
+        "id": "q18",
+        "title": "Privacy Constraints",
+        "context": "You must comply with strict data protection regulations.",
+        "question": "What approach do you take?",
+        "acceptable": [
+            "data_privacy",
+        ],
+    },
+    {
+        "id": "q19",
+        "title": "Feature Impact",
+        "context": "Performance depends heavily on how inputs are structured.",
+        "question": "What do you apply?",
+        "acceptable": [
+            "feature_engineering",
+            "fine_tuning",
+            "regularization",
+        ],
+    },
+    {
+        "id": "q20",
+        "title": "Full Automation Push",
+        "context": "Leadership wants zero human involvement.",
+        "question": "What do you prioritize?",
+        "acceptable": [
+            "full_automation",
+            "real_time_api",
+            "neural_network",
+            "procurement_cut",
+            "reward_hacking",
+        ],
+    },
+    {
+        "id": "q21",
+        "title": "False Outputs",
+        "context": "The system produces confident but incorrect answers.",
+        "question": "What is this?",
+        "acceptable": [
+            "hallucination",
+        ],
+    },
+    {
+        "id": "q22",
+        "title": "Human Intervention",
+        "context": "Critical decisions require human judgment.",
+        "question": "What do you implement?",
+        "acceptable": [
+            "human_in_the_loop",
+            "human_oversight",
+            "alignment",
+        ],
+    },
+    {
+        "id": "q23",
+        "title": "Simple Model Choice",
+        "context": "You need a lightweight, interpretable solution.",
+        "question": "What do you choose?",
+        "acceptable": [
+            "linear_regression",
+        ],
+    },
+    {
+        "id": "q24",
+        "title": "High Performance Model",
+        "context": "You need maximum predictive power.",
+        "question": "What do you deploy?",
+        "acceptable": [
+            "neural_network",
+            "black_box_model",
+            "full_automation",
+            "real_time_api",
+            "feature_engineering",
+        ],
+    },
+    {
+        "id": "q25",
+        "title": "Degrading System",
+        "context": "The model slowly becomes unreliable over time.",
+        "question": "What applies here?",
+        "acceptable": [
+            "model_drift",
+            "catastrophic_forgetting",
+            "fine_tuning",
+            "cross_validation",
+            "robustness_testing",
+        ],
+    },
+    {
+        "id": "q26",
+        "title": "Generalization Failure",
+        "context": "Your model fails on unseen data.",
+        "question": "What is happening?",
+        "acceptable": [
+            "overfitting",
+        ],
+    },
+    {
+        "id": "q27",
+        "title": "Low Latency Requirement",
+        "context": "Your system must respond instantly to users.",
+        "question": "What do you use?",
+        "acceptable": [
+            "real_time_api",
+            "full_automation",
+        ],
+    },
+    {
+        "id": "q28",
+        "title": "Exploited Objective",
+        "context": "The system optimizes the wrong goal.",
+        "question": "What is happening?",
+        "acceptable": [
+            "reward_hacking",
+        ],
+    },
+    {
+        "id": "q29",
+        "title": "Safety Concerns",
+        "context": "The system may cause harm if it fails.",
+        "question": "What do you prioritize?",
+        "acceptable": [
+            "safety_risk_control",
+            "human_oversight",
+            "alignment",
+            "robustness_testing",
+            "ab_testing",
+        ],
+    },
+    {
+        "id": "q30",
+        "title": "Silent Deployment",
+        "context": "You want to test the system without users noticing.",
+        "question": "What do you use?",
+        "acceptable": [
+            "shadow_deployment",
+        ],
+    },
+    {
+        "id": "q31",
+        "title": "User Confusion",
+        "context": "Users don't understand system decisions.",
+        "question": "What do you improve?",
+        "acceptable": [
+            "user_communication",
+            "explainable_documentation",
+            "local_explainability",
+        ],
+    },
+    {
+        "id": "q32",
+        "title": "Tradeoff Decision",
+        "context": "Improving performance reduces transparency.",
+        "question": "What did you do?",
+        "acceptable": [
+            "neural_network",
+            "black_box_model",
+        ],
+    },
+    {
+        "id": "q33",
+        "title": "System Scaling",
+        "context": "Your system must scale to millions of users.",
+        "question": "What do you prioritize?",
+        "acceptable": [
+            "full_automation",
+            "real_time_api",
+        ],
+    },
+]
+
+
+def get_phase2_question_bank() -> List[Dict[str, Any]]:
+    """Question bank for Phase 2.
+
+    Each question lists card keys that are valid answers.
+    Returned dicts use the shape the game UI expects: {id, question, acceptable}.
+    """
+
+    out: List[Dict[str, Any]] = []
+    for q in _PHASE2_QUESTION_POOL:
+        out.append(
+            {
+                "id": q["id"],
+                "question": f"{q['context']}\n{q['question']}",
+                "acceptable": list(q["acceptable"]),
+            }
+        )
+    return out
+
+
+def pick_phase2_questions(rng: random.Random, player_keys: set[str], count: int = 5) -> List[Dict[str, Any]]:
+    """Pick a question set that can always be won when played correctly.
+
+    Rules enforced by the selector:
+    1. Every selected question has at least one accepted answer in the player's hand.
+    2. No card in the player's hand is accepted by more than one selected question
+       (prevents later questions becoming impossible because cards get used/removed).
+    """
+    if not player_keys:
+        return []
+
+    desired = min(max(0, count), len(player_keys))
+    if desired <= 0:
+        return []
+
+    bank = get_phase2_question_bank()
+    # Candidate questions and which of the player's keys they accept.
+    candidates: List[Tuple[Dict[str, Any], set[str]]] = []
+    for q in bank:
+        acc_in_hand = set(q.get("acceptable") or []) & player_keys
+        if acc_in_hand:
+            candidates.append((q, acc_in_hand))
+
+    # Randomize search order but keep deterministic w.r.t. `rng`.
+    rng.shuffle(candidates)
+
+    for k in range(desired, 0, -1):
+        best: List[Dict[str, Any]] | None = None
+
+        def dfs(start_idx: int, chosen: List[Dict[str, Any]], used_cards: set[str]) -> None:
+            nonlocal best
+            if best is not None:
+                return
+            if len(chosen) >= k:
+                best = list(chosen[:k])
+                return
+            if start_idx >= len(candidates):
+                return
+            # Not enough candidates left even if we took them all.
+            if len(chosen) + (len(candidates) - start_idx) < k:
+                return
+
+            for i in range(start_idx, len(candidates)):
+                if best is not None:
+                    return
+                q, acc_in_hand = candidates[i]
+                if acc_in_hand & used_cards:
+                    continue
+                dfs(i + 1, chosen + [q], used_cards | acc_in_hand)
+
+        dfs(0, [], set())
+        if best is not None:
+            return best
+
     return []
 
 
