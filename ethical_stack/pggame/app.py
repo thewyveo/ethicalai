@@ -9,20 +9,33 @@ from typing import Dict, List, Optional, Tuple
 import pygame
 
 from ethical_stack.pggame.content import (
+    ACTIVE_SLOT_CAPACITY,
+    apply_condition_passives_end_of_round,
+    contract_fulfilled,
+    get_active_slot_capacity,
     get_active_stats,
+    get_contract_name,
+    get_contract_requirements,
+    get_contracts,
     get_deck_for_round,
     get_final_stage_intro,
     get_final_stage_outcome,
     get_final_stage_questions,
     get_round_constraint,
-    round_story,
+    get_scenario_objective_lines,
+    get_scenario_objective_text,
+    load_cards_from_file,
+    on_card_added_to_active,
+    on_card_removed_from_active,
+    on_card_trashed,
+    recompute_stats_from_active,
 )
 from ethical_stack.pggame.model import Card, State, Stat
 
 
 # --- Visual constants (simple “Balatro-ish” table vibe) ---
 # Higher internal res + lower scale = sharper text.
-LOW_W, LOW_H = 640, 400
+LOW_W, LOW_H = 650, 450
 SCALE = 2
 W, H = int(LOW_W * SCALE), int(LOW_H * SCALE)
 
@@ -76,17 +89,17 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
 
     screen = pygame.Surface((LOW_W, LOW_H))
 
-    # Prefer a system font; we render without antialias for crisp pixel look.
+    # Compact fonts for more card space; crisp pixel look.
     try:
-        font = pygame.font.SysFont("Arial", 18, bold=True)
-        font_small = pygame.font.SysFont("Arial", 15, bold=True)
-        font_big = pygame.font.SysFont("Arial", 24, bold=True)
-        font_tiny = pygame.font.SysFont("Arial", 12, bold=True)
+        font = pygame.font.SysFont("Arial", 14, bold=True)
+        font_small = pygame.font.SysFont("Arial", 12, bold=True)
+        font_big = pygame.font.SysFont("Arial", 20, bold=True)
+        font_tiny = pygame.font.SysFont("Arial", 10, bold=True)
     except Exception:
-        font = pygame.font.Font(None, 24)
-        font_small = pygame.font.Font(None, 20)
-        font_big = pygame.font.Font(None, 30)
-        font_tiny = pygame.font.Font(None, 16)
+        font = pygame.font.Font(None, 20)
+        font_small = pygame.font.Font(None, 16)
+        font_big = pygame.font.Font(None, 26)
+        font_tiny = pygame.font.Font(None, 14)
 
     def rtxt(f: pygame.font.Font, text: str, color: Tuple[int, int, int], bold_px: int = 1) -> pygame.Surface:
         """Pixel-crisp text with slight bolding (keeps readability)."""
@@ -108,15 +121,18 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
     played_this_round = False
     played_effects_this_round: List[Dict[str, int]] = []
 
-    # Mechanics knobs (simple and readable)
+    # Mechanics: hand max 5; draw up to 3 per round; trash to discard; active = build (max 5), stats from active
     hand_limit = 5
     draw_per_round = 3
-    play_limit = 3
 
-    # UI layout (low-res coords)
-    stat_bar = pygame.Rect(8, 8, LOW_W - 16, 22)
-    msg_box = pygame.Rect(8, 34, LOW_W - 16, 72)
-    hover_box = pygame.Rect(8, 110, LOW_W - 16, 46)
+    stat_bar = pygame.Rect(8, 6, LOW_W - 16, 16)
+    active_row_y = 20
+    active_label_y = active_row_y + 4
+    active_slot_y = active_row_y + 20
+    active_margin_right = 16
+    msg_text_y = stat_bar.bottom + 6
+    msg_max_w = LOW_W - 24
+    hover_box = pygame.Rect(8, msg_text_y + 46, LOW_W // 2 - 16, 58)
 
     # Card size (small so they fit the window); art is smooth-scaled to this for readability.
     _pggame_dir = os.path.dirname(os.path.abspath(__file__))
@@ -136,32 +152,14 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             except Exception:
                 pass
 
-    # suits.txt: "X,y" with X = 2..24 or A, y = r (red border) or w (white border)
-    suit_border_map: Dict[str, str] = {}
-    _suits_path = os.path.join(_cards_dir, "suits.txt")
-    if os.path.isfile(_suits_path):
-        try:
-            with open(_suits_path, "r", encoding="utf-8") as _f:
-                for _line in _f:
-                    _line = _line.strip()
-                    if not _line or "," not in _line:
-                        continue
-                    _x, _y = _line.split(",", 1)
-                    _x, _y = _x.strip(), _y.strip().lower()
-                    if _y in ("r", "w"):
-                        suit_border_map[_x] = _y
-        except Exception:
-            pass
+    # cards.txt: number, color (r/w), key, rarity — border from card.suit
+    cards_pool: List[Card] = load_cards_from_file(_cards_dir)
 
     def card_border_color(c: Card) -> Tuple[int, int, int]:
-        """Border color from suits.txt: red or white by card art id (A, 2..24); else GOLD."""
-        if not c.art:
-            return GOLD
-        key = c.art.split("-")[0].strip()
-        color_key = suit_border_map.get(key)
-        if color_key == "r":
+        """Border from card suit: r = red, w = white."""
+        if getattr(c, "suit", None) == "r":
             return RED
-        if color_key == "w":
+        if getattr(c, "suit", None) == "w":
             return WHITE
         return GOLD
 
@@ -176,35 +174,46 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
     boss_readiness_deltas: List[int] = []
     boss_option_rects: List[pygame.Rect] = []  # filled during draw for click detection
 
-    # PLAY button: centered above the card row; shown only when at least 1 card selected.
-    # Bigger button to fit updated play.png
-    btn_play = Button(pygame.Rect((LOW_W - 240) // 2, card_base_y - 64, 240, 56), "PLAY")
-
-    # After PLAY, user must click deck to draw; hint after 2.5s.
+    # Deck click = draw cards AND advance round (only if hand ≤ 3).
     pending_draw: bool = False
     pending_draw_frames: int = 0
+    end_round_after_draw: bool = False
+    deck_warning_frames: int = 0  # When >0: red mask + warning
+    deck_warning_hand_full: bool = True  # True = "max 3 cards" message, False = "no cards to draw"
+    active_slot_conflict_flash: Optional[int] = None  # Slot index to flash red (real_time_api vs batch_processing)
+    active_slot_conflict_frames: int = 0
     PENDING_DRAW_HINT_FRAMES = 150  # ~2.5s at 60fps
 
     # Deck-draw animation (cards are added to `hand` one-by-one to allow smooth motion).
     deck_draw_in_progress: bool = False
     deck_draw_buffer: List[Card] = []
     deck_draw_step_index: int = 0  # how many cards from buffer are already committed to hand
+    deck_draw_start_hand_len: int = 0  # hand size when this draw started (for black box: which cards were just drawn)
+    deck_draw_start_had_black_box: bool = False  # whether black box model was in ACTIVE when this draw started
     DECK_DRAW_STEP_FRAMES = 18  # frames per "add one card" animation step
+    # Black box model: one hand card is shown as card back until next draw.
+    hidden_hand_index: Optional[int] = None
+    # Explainable documentation: hover over next-card preview shows this card in hover panel.
+    hover_peek_card: Optional[Card] = None
 
     # Collect animation: played cards fly to the collection pile (like deck draw arch).
     collect_anim_list: List[Tuple[Card, pygame.Rect, float]] = []  # (card, start_rect, progress 0..1)
     collect_anim_frames_per_card = 20
 
-    message = "Select up to 3 cards. PLAY commits and scores the round."
-    story_line = round_story(state.round_idx)
-    mode: str = "menu"  # menu -> credits -> intro -> game -> over -> boss
+    message = "Click deck to draw & advance. Max 3 in hand. Active cards = your stats."
+    story_line = "Objective will be set when you start."
+    objective_stats_line = ""
+    mode: str = "menu"  # menu -> intro -> game -> over
     hover_idx: int | None = None
+    hover_active_idx: Optional[int] = None
     frame: int = 0
     game_over_retry_rect: Optional[pygame.Rect] = None
     menu_play_rect: Optional[pygame.Rect] = None
     menu_credits_rect: Optional[pygame.Rect] = None
     menu_settings_rect: Optional[pygame.Rect] = None
     credits_back_rect: Optional[pygame.Rect] = None
+    contract_eval_passed: bool = False
+    game_over_from_contract_eval: bool = False
 
     def draw_from_deck(n: int) -> None:
         nonlocal deck, hand
@@ -214,27 +223,29 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             hand.append(deck.pop())
 
     def start_round() -> None:
-        nonlocal selected, story_line, message, played_this_round, deck_anim_frames, deck, discard, pending_draw, pending_draw_frames
+        nonlocal selected, story_line, objective_stats_line, message, played_this_round, deck_anim_frames, deck, discard, pending_draw, pending_draw_frames
         nonlocal deck_draw_in_progress, deck_draw_buffer, deck_draw_step_index
         selected = []
         played_this_round = False
         played_effects_this_round.clear()
-        story_line = round_story(state.round_idx)
+        story_line, objective_stats_line = get_scenario_objective_lines(state.scenario_key)
         if state.round_idx == 13:
             return
-        deck = get_deck_for_round(rng, state.round_idx)
+        deck = get_deck_for_round(rng, state.round_idx, cards_pool)
         discard = []
         deck_draw_in_progress = False
         deck_draw_buffer = []
         deck_draw_step_index = 0
         deck_anim_frames = 0
-        # User must click the deck to draw (no auto-draw).
         pending_draw = True
         pending_draw_frames = 0
-        message = "Meet this round's requirement to advance."
+        message = "Draw from deck. Drag to TRASH or ACTIVE. End round when ready."
 
     def hard_loss() -> bool:
-        return state.trust < 0 or state.fairness < 0 or state.transparency < 0 or state.automation < 0
+        return (
+            state.transparency < 0 or state.stability < 0 or state.automation < 0
+            or state.generalizability < 0 or state.integrity < 0
+        )
 
     def check_round_constraint() -> bool:
         """True if constraint failed (player loses)."""
@@ -286,31 +297,26 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             state.trust -= 1
 
     def end_round() -> None:
-        nonlocal message, story_line, mode, constraint_failed
+        nonlocal message, story_line, mode, contract_eval_passed, game_over_from_contract_eval
         if hard_loss():
             mode = "over"
             return
-        if check_round_constraint():
-            constraint_failed = True
-            c = get_round_constraint(state.round_idx)
-            if c:
-                stat, min_val = c
-                stat_name = stat.replace("_", " ").title()
-                message = f"Requirement not met: {stat_name} must be >= {min_val}."
-            mode = "over"
-            return
+        # No round-constraint game over here: always advance to next round so user can draw again.
+        # Contract/requirements are evaluated at final stage.
 
+        apply_condition_passives_end_of_round(state)
         base = state.base_points()
         state.score += max(0, base)
 
         if state.round_idx < state.rounds_total:
             state.round_idx += 1
             if state.round_idx == 13:
-                story_line = "Final stage."
-                message = "Boss / final stage - placeholder."
-                mode = "boss"
+                contract_eval_passed = contract_fulfilled(state, state.scenario_key)
+                game_over_from_contract_eval = True
+                mode = "over"
                 return
             start_round()
+            mode = "game"
         else:
             story_line = "Run complete."
             message = "Your choices outlive your dashboard."
@@ -322,9 +328,9 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
     def card_effect_line(c: Card) -> str:
         active = get_active_stats(state.round_idx)
         parts: List[str] = []
-        shorts = {"trust": "T", "automation": "A", "fairness": "F", "transparency": "TP"}
+        shorts = {"transparency": "T", "stability": "S", "automation": "A", "generalizability": "G", "integrity": "I"}
         for key in active:
-            short = shorts.get(key, key[:2])
+            short = shorts.get(key, key[0])
             v = int(c.effects.get(key, 0))
             if v:
                 sign = "+" if v > 0 else ""
@@ -371,19 +377,59 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
     def draw_stats() -> None:
         draw_pixel_border_alpha(screen, stat_bar, FELT_DARK, GOLD, fill_alpha=235)
         active = get_active_stats(state.round_idx)
-        labels = {"trust": "T", "automation": "A", "fairness": "F", "transparency": "TP"}
+        labels = {"transparency": "T", "stability": "S", "automation": "A", "generalizability": "G", "integrity": "I"}
         metrics = "  ".join(f"{labels.get(s, s)}:{state.get_stat(s)}" for s in active)
         mtxt = rtxt(font_small, metrics, PAPER)
-        screen.blit(mtxt, (stat_bar.x + 6, stat_bar.y + 5))
+        screen.blit(mtxt, (stat_bar.x + 6, stat_bar.y + 2))
         score_str = f"SCORE:{state.score}"
         stxt = rtxt(font_small, score_str, PAPER)
-        screen.blit(stxt, (stat_bar.centerx - stxt.get_width() // 2, stat_bar.y + 5))
+        screen.blit(stxt, (stat_bar.centerx - stxt.get_width() // 2, stat_bar.y + 2))
         if state.round_idx >= 13:
             rlabel = "Final Round"
         else:
             rlabel = f"Round {state.round_idx} of 12"
         rts = rtxt(font_small, rlabel, GOLD)
-        screen.blit(rts, (stat_bar.right - rts.get_width() - 6, stat_bar.y + 5))
+        screen.blit(rts, (stat_bar.right - rts.get_width() - 6, stat_bar.y + 2))
+
+    def draw_active_row() -> None:
+        """Draw ACTIVE zone: 5 or 6 card slots (build); stats come from these cards."""
+        slot_rects = active_slot_rects()
+        label = rtxt(font_tiny, "ACTIVE", GOLD, bold_px=1)
+        total_w = slot_rects[-1].right - slot_rects[0].left if slot_rects else 0
+        lx = slot_rects[0].left + total_w // 2 - label.get_width() // 2 if slot_rects else 0
+        ly = active_label_y
+        # subtle shadow for visibility (same style as COLLECTED)
+        shadow = rtxt(font_tiny, "ACTIVE", INK, bold_px=1)
+        shadow.set_alpha(160)
+        screen.blit(shadow, (lx + 1, ly + 1))
+        screen.blit(label, (lx, ly))
+        for i, r in enumerate(slot_rects):
+            card = state.active_slots[i] if i < len(state.active_slots) else None
+            if card:
+                # Card present: draw with same shake/wobble as old selected-hand-cards animation
+                outer = card_border_color(card)
+                card_surf = pygame.Surface((ACTIVE_CARD_W, ACTIVE_CARD_H), pygame.SRCALPHA)
+                if card.art and card.art in card_art_surfs:
+                    scaled = pygame.transform.smoothscale(card_art_surfs[card.art], (ACTIVE_CARD_W, ACTIVE_CARD_H))
+                    card_surf.blit(scaled, (0, 0))
+                    draw_pixel_frame(card_surf, pygame.Rect(0, 0, ACTIVE_CARD_W, ACTIVE_CARD_H), outer, PAPER_DARK)
+                else:
+                    draw_pixel_border(card_surf, pygame.Rect(0, 0, ACTIVE_CARD_W, ACTIVE_CARD_H), (250, 248, 240), outer)
+                    pip = rtxt(font_tiny, card.suit[0].upper(), outer, bold_px=0)
+                    card_surf.blit(pip, (2, 2))
+                angle = math.sin((frame * 0.22) + i * 1.1) * 2.0
+                rotated = pygame.transform.rotozoom(card_surf, angle, 1.0)
+                screen.blit(rotated, rotated.get_rect(center=r.center))
+                if active_slot_conflict_flash == i and active_slot_conflict_frames > 0:
+                    pulse = 0.4 + 0.35 * math.sin(2.0 * math.pi * (active_slot_conflict_frames / 15))
+                    flash_surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+                    flash_surf.fill((220, 72, 72, int(180 * pulse)))
+                    screen.blit(flash_surf, r.topleft)
+            else:
+                # Empty slot: dark green border only
+                draw_pixel_border(screen, r, FELT_DARK, GOLD)
+                empty = rtxt(font_tiny, "—", (100, 98, 80), bold_px=0)
+                screen.blit(empty, (r.centerx - empty.get_width() // 2, r.centery - empty.get_height() // 2))
 
     def wrap_text(text: str, max_width: int) -> List[str]:
         words = text.split()
@@ -401,82 +447,116 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         return lines
 
     def draw_message() -> None:
-        draw_pixel_border_alpha(screen, msg_box, FELT_DARK, GOLD, fill_alpha=235)
-        y = msg_box.y + 4
-        max_w = msg_box.w - 12
-        line_step = font_small.get_linesize() + 5
-        for line in wrap_text(story_line, max_w):
-            t = rtxt(font_small, line, PAPER)
-            screen.blit(t, (msg_box.x + 6, y))
+        # Line 1: Objective: scenario name. Line 2: compact stats. Then message.
+        x, y = 12, msg_text_y
+        line_step = font_tiny.get_linesize() + 2
+        for line in wrap_text(story_line, msg_max_w):
+            t = rtxt(font_tiny, line, PAPER)
+            shadow_t = rtxt(font_tiny, line, INK)
+            shadow_t.set_alpha(160)
+            screen.blit(shadow_t, (x + 1, y + 1))
+            screen.blit(t, (x, y))
+            y += line_step
+        if objective_stats_line:
+            st = rtxt(font_tiny, objective_stats_line, RED, bold_px=0)
+            shadow_st = rtxt(font_tiny, objective_stats_line, INK)
+            shadow_st.set_alpha(160)
+            screen.blit(shadow_st, (x + 1, y + 1))
+            screen.blit(st, (x, y))
             y += line_step
         if message:
-            for line in wrap_text(message, max_w):
-                m = rtxt(font_small, line, GOLD)
-                screen.blit(m, (msg_box.x + 6, y))
-                y += line_step
-        c = get_round_constraint(state.round_idx)
-        if c and state.round_idx <= 3:
-            stat, min_val = c
-            req = f"Requirement: {stat.replace('_', ' ').title()} >= {min_val}"
-            for line in wrap_text(req, max_w):
-                r = rtxt(font_small, line, (200, 198, 188), bold_px=0)
-                screen.blit(r, (msg_box.x + 6, y))
+            for line in wrap_text(message, msg_max_w):
+                m = rtxt(font_tiny, line, GOLD)
+                shadow_m = rtxt(font_tiny, line, INK)
+                shadow_m.set_alpha(160)
+                screen.blit(shadow_m, (x + 1, y + 1))
+                screen.blit(m, (x, y))
                 y += line_step
 
     def draw_hover_panel() -> None:
-        if hover_idx is None or hover_idx < 0 or hover_idx >= len(hand):
+        # Format: Line 1 = [card name] · [rarity] (white name, no black fill). Line 2 = +2S etc. if stats. Line 3 = passive text if passive.
+        c: Optional[Card] = None
+        # While dragging, ignore hover targets and force the hover panel to match what the user is holding.
+        if dragging_hand_idx is not None and dragging_hand_idx < len(hand):
+            if hidden_hand_index is not None and dragging_hand_idx == hidden_hand_index:
+                # Black box: hidden hand card — show only "Hidden card"
+                draw_pixel_border_alpha(screen, hover_box, FELT_DARK, GOLD, fill_alpha=235)
+                hidden_txt = rtxt(font_tiny, "Hidden card", PAPER, bold_px=0)
+                screen.blit(hidden_txt, (hover_box.x + 4, hover_box.y + 4))
+                return
+            c = hand[dragging_hand_idx]
+        elif hover_peek_card is not None:
+            c = hover_peek_card
+        elif hover_idx is not None and hover_idx == hidden_hand_index:
+            # Black box: hidden hand card — show only "Hidden card"
+            draw_pixel_border_alpha(screen, hover_box, FELT_DARK, GOLD, fill_alpha=235)
+            hidden_txt = rtxt(font_tiny, "Hidden card", PAPER, bold_px=0)
+            screen.blit(hidden_txt, (hover_box.x + 4, hover_box.y + 4))
             return
-        c = hand[hover_idx]
+        if c is None and hover_active_idx is not None and 0 <= hover_active_idx < len(state.active_slots):
+            card_in_slot = state.active_slots[hover_active_idx]
+            if card_in_slot:
+                c = card_in_slot
+        if c is None and hover_idx is not None and 0 <= hover_idx < len(hand):
+            c = hand[hover_idx]
+        if c is None:
+            return
         draw_pixel_border_alpha(screen, hover_box, FELT_DARK, GOLD, fill_alpha=235)
+        x, y = hover_box.x + 4, hover_box.y + 2
+        line_step = font_tiny.get_linesize() + 2
+        max_w = hover_box.w - 8
 
-        name = rtxt(font_small, c.name, PAPER)
-        screen.blit(name, (hover_box.x + 6, hover_box.y + 4))
-        # Effect line: each stat token colored by sign (green for +, red for -).
-        active = get_active_stats(state.round_idx)
-        shorts = {"trust": "T", "automation": "A", "fairness": "F", "transparency": "TP"}
-        x = hover_box.x + 6
-        y = hover_box.y + 16
         pos_c = (80, 210, 130)
         neg_c = (220, 72, 72)
         neutral_c = (200, 198, 188)
-        any_token = False
+        rarity = str(getattr(c, "rarity", "common")).lower()
+        rarity_str = rarity.upper()
+        rarity_color = {"common": pos_c, "rare": BLUE, "epic": (160, 90, 220), "cursed": RED}.get(rarity, neutral_c)
+
+        # Line 1: card name (white) · rarity (colored), no black fill
+        name_surf = rtxt(font_tiny, c.name, PAPER, bold_px=0)
+        name_surf.set_colorkey((0, 0, 0))
+        screen.blit(name_surf, (x, y))
+        cx = x + name_surf.get_width()
+        sep = rtxt(font_tiny, " · ", neutral_c, bold_px=0)
+        sep.set_colorkey((0, 0, 0))
+        screen.blit(sep, (cx, y))
+        cx += sep.get_width()
+        rar = rtxt(font_tiny, rarity_str, rarity_color, bold_px=0)
+        rar.set_colorkey((0, 0, 0))
+        screen.blit(rar, (cx, y))
+        y += line_step
+
+        # Line 2: full stat names in hover only (e.g. -1 Stability, +2 Automation)
+        active = get_active_stats(state.round_idx)
+        full_names = {"transparency": "Transparency", "stability": "Stability", "automation": "Automation", "generalizability": "Generalizability", "integrity": "Integrity"}
+        tokens: List[Tuple[str, Tuple[int, int, int]]] = []
         for key in active:
             v = int(c.effects.get(key, 0))
-            if not v:
-                continue
-            any_token = True
-            short = shorts.get(key, key[:2])
-            sign = "+" if v > 0 else ""
-            token = f"{short} {sign}{v}  "
-            color = pos_c if v > 0 else neg_c
-            surf = rtxt(font_small, token, color)
-            screen.blit(surf, (x, y))
-            x += surf.get_width()
-        if not any_token:
-            eff = rtxt(font_small, "—", neutral_c, bold_px=0)
-            screen.blit(eff, (x, y))
+            if v:
+                name = full_names.get(key, key.replace("_", " ").title())
+                tokens.append((f"{v:+d} {name}", pos_c if v > 0 else neg_c))
+        if tokens:
+            cx = x
+            for i, (tok, col) in enumerate(tokens):
+                if i > 0:
+                    comma = rtxt(font_tiny, ", ", neutral_c, bold_px=0)
+                    comma.set_colorkey((0, 0, 0))
+                    screen.blit(comma, (cx, y))
+                    cx += comma.get_width()
+                surf = rtxt(font_tiny, tok, col, bold_px=0)
+                surf.set_colorkey((0, 0, 0))
+                screen.blit(surf, (cx, y))
+                cx += surf.get_width()
+            y += line_step
 
-        # wrap the ethical blurb into 2 lines max
-        blurb = c.text.strip()
-        words = blurb.split()
-        line1: List[str] = []
-        line2: List[str] = []
-        current = line1
-        for w in words:
-            trial = " ".join(current + [w])
-            if font_small.size(trial)[0] <= (hover_box.w - 12):
-                current.append(w)
-            elif current is line1:
-                current = line2
-                if font_small.size(w)[0] <= (hover_box.w - 12):
-                    current.append(w)
-            else:
-                break
-        l1 = rtxt(font_small, " ".join(line1), (200, 198, 188), bold_px=0)
-        l2 = rtxt(font_small, " ".join(line2), (200, 198, 188), bold_px=0)
-        screen.blit(l1, (hover_box.x + 6, hover_box.y + 28))
-        if line2:
-            screen.blit(l2, (hover_box.x + 6, hover_box.y + 38))
+        # Line 3: passive ability description only if card has passive
+        if getattr(c, "passive", None):
+            for line in wrap_text(c.text.strip(), max_w):
+                bl = rtxt(font_tiny, line, neutral_c, bold_px=0)
+                bl.set_colorkey((0, 0, 0))
+                screen.blit(bl, (x, y))
+                y += line_step
 
     def card_rects() -> List[pygame.Rect]:
         base_y = card_base_y
@@ -509,7 +589,9 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                 rects = card_rects()
                 for i, (c, r) in enumerate(zip(hand, rects)):
                     outer = card_border_color(c)
-                    if i in selected:
+                    if i == hidden_hand_index and deck_back_card_surf is not None:
+                        screen.blit(deck_back_card_surf, r)
+                    elif i in selected:
                         card_surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
                         if c.art and c.art in card_art_surfs:
                             card_surf.blit(card_art_surfs[c.art], (0, 0))
@@ -552,7 +634,9 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                 y = card_base_y - (5 if i in selected else 0)
                 r = pygame.Rect(x, y, w, h)
                 outer = card_border_color(c)
-                if i in selected:
+                if i == hidden_hand_index and deck_back_card_surf is not None:
+                    screen.blit(deck_back_card_surf, r)
+                elif i in selected:
                     card_surf = pygame.Surface((w, h), pygame.SRCALPHA)
                     if c.art and c.art in card_art_surfs:
                         card_surf.blit(card_art_surfs[c.art], (0, 0))
@@ -597,7 +681,9 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         for i, (c, r) in enumerate(zip(hand, rects)):
             outer = card_border_color(c)
             inner = PAPER_DARK
-            if i in selected:
+            if i == hidden_hand_index and deck_back_card_surf is not None:
+                screen.blit(deck_back_card_surf, r)
+            elif i in selected:
                 card_surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
                 if c.art and c.art in card_art_surfs:
                     card_surf.blit(card_art_surfs[c.art], (0, 0))
@@ -624,7 +710,27 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             ease = norm * norm * (3.0 - 2.0 * norm)
             arch_h = int(CARD_H * 0.55)
             sx, sy = start_r.centerx, start_r.centery
-            tx, ty = collected_rect.centerx, collected_rect.centery
+            tx, ty = trash_rect.centerx, trash_rect.centery
+            xc = int(sx + (tx - sx) * ease)
+            yc = int(sy + (ty - sy) * ease - arch_h * math.sin(math.pi * norm))
+            anim_r = pygame.Rect(0, 0, CARD_W, CARD_H)
+            anim_r.center = (xc, yc)
+            outer = card_border_color(card)
+            if card.art and card.art in card_art_surfs:
+                screen.blit(card_art_surfs[card.art], anim_r)
+                draw_pixel_frame(screen, anim_r, outer, PAPER_DARK)
+            else:
+                draw_pixel_border(screen, anim_r, PAPER, outer)
+                pip = rtxt(font_small, card.suit[0].upper(), outer, bold_px=0)
+                screen.blit(pip, (anim_r.x + 4, anim_r.y + 3))
+
+        # Active-to-hand animation: card flies from active slot to hand (click without drag).
+        for card, start_r, progress, _slot_idx in active_to_hand_anim_list:
+            norm = min(1.0, progress)
+            ease = norm * norm * (3.0 - 2.0 * norm)
+            arch_h = int(CARD_H * 0.55)
+            sx, sy = start_r.centerx, start_r.centery
+            tx, ty = hand_drop_rect.centerx, hand_drop_rect.centery
             xc = int(sx + (tx - sx) * ease)
             yc = int(sy + (ty - sy) * ease - arch_h * math.sin(math.pi * norm))
             anim_r = pygame.Rect(0, 0, CARD_W, CARD_H)
@@ -639,9 +745,35 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                 screen.blit(pip, (anim_r.x + 4, anim_r.y + 3))
 
     deck_rect = pygame.Rect(10, deck_base_y, CARD_W, CARD_H)
-    collected_rect = pygame.Rect(LOW_W - 10 - CARD_W, deck_base_y, CARD_W, CARD_H)
+    trash_rect = pygame.Rect(LOW_W - 10 - CARD_W, deck_base_y, CARD_W, CARD_H)
+    # Hand drop zone: center row where hand cards sit (max 3); drop active card here to return to hand.
+    _hand_gap = 8
+    _hand_total_w = hand_limit * CARD_W + (hand_limit - 1) * _hand_gap
+    hand_drop_rect = pygame.Rect((LOW_W - _hand_total_w) // 2, card_base_y, _hand_total_w, CARD_H)
     deck_anim_frames = 0
     trash_flash_frames = 0
+
+    # Active row: 5 or 6 slots (6 when carbon_footprint in active), smaller cards
+    ACTIVE_CARD_W, ACTIVE_CARD_H = 40, 52
+    active_gap = 6
+
+    def active_slot_rects() -> List[pygame.Rect]:
+        cap = get_active_slot_capacity(state)
+        total_w = cap * ACTIVE_CARD_W + (cap - 1) * active_gap
+        start_x = LOW_W - total_w - active_margin_right
+        return [
+            pygame.Rect(start_x + i * (ACTIVE_CARD_W + active_gap), active_slot_y, ACTIVE_CARD_W, ACTIVE_CARD_H)
+            for i in range(cap)
+        ]
+
+    # Drag state: hand index or active index being dragged; card follows mouse until drop (trash or active slot).
+    dragging_hand_idx: Optional[int] = None
+    dragging_active_idx: Optional[int] = None
+    drag_start_pos: Tuple[int, int] = (0, 0)
+
+    # Click on active card (no drag): fly card back to hand.
+    active_to_hand_anim_list: List[Tuple[Card, pygame.Rect, float, int]] = []  # (card, start_rect, progress, slot_idx)
+    active_to_hand_frames = 20
 
     # Deck back image (card back graphic)
     _deck_back_paths = [
@@ -657,51 +789,25 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             except Exception:
                 pass
 
-    # Cached at the card size so deck animation can reuse it without rescaling every frame.
-    deck_back_card_surf: Optional[pygame.Surface] = None
-    if deck_back_surf is not None:
-        deck_back_card_surf = pygame.transform.smoothscale(deck_back_surf, (CARD_W, CARD_H))
-
-    _play_paths = [
-        os.path.join(_src_dir, "play.png"),
-        os.path.join(_src_dir, "play.webp"),
+    _trash_paths = [
+        os.path.join(_src_dir, "trash.png"),
+        os.path.join(_src_dir, "trash.webp"),
     ]
-    play_surf: Optional[pygame.Surface] = None
-    play_btn_surf: Optional[pygame.Surface] = None
-    play_btn_draw_surf: Optional[pygame.Surface] = None
-    play_btn_hit_rect: Optional[pygame.Rect] = None
-    for _path in _play_paths:
+    trash_surf: Optional[pygame.Surface] = None
+    trash_card_surf: Optional[pygame.Surface] = None
+    for _path in _trash_paths:
         if os.path.isfile(_path):
             try:
-                play_surf = pygame.image.load(_path).convert_alpha()
-                # Scale to FIT the button rect (no distortion).
-                iw, ih = play_surf.get_width(), play_surf.get_height()
-                if iw > 0 and ih > 0:
-                    scale = min(btn_play.rect.w / iw, btn_play.rect.h / ih)
-                    tw = max(1, int(iw * scale))
-                    th = max(1, int(ih * scale))
-                    play_btn_surf = pygame.transform.smoothscale(play_surf, (tw, th))
-                    # 2x visual size (image only). Hitbox stays at fitted size.
-                    play_btn_draw_surf = pygame.transform.smoothscale(play_surf, (max(1, tw * 2), max(1, th * 2)))
-                    # Hitbox will be set each frame from the actual blit rect.
+                trash_surf = pygame.image.load(_path).convert_alpha()
+                trash_card_surf = pygame.transform.smoothscale(trash_surf, (CARD_W, CARD_H))
                 break
             except Exception:
                 pass
 
-    def draw_play_button(hover: bool) -> None:
-        nonlocal play_btn_hit_rect
-        if play_btn_surf is None:
-            draw_button(btn_play, hover)
-            play_btn_hit_rect = btn_play.rect.copy()
-            return
-        # Hitbox uses fitted image rect; draw uses a 2x visual surface.
-        play_btn_hit_rect = play_btn_surf.get_rect(center=btn_play.rect.center)
-        draw_surf = play_btn_draw_surf or play_btn_surf
-        dest = draw_surf.get_rect(center=play_btn_hit_rect.center)
-        if hover and btn_play.enabled:
-            dest.x += 1
-            dest.y += 1
-        screen.blit(draw_surf, dest)
+    # Cached at the card size so deck animation can reuse it without rescaling every frame.
+    deck_back_card_surf: Optional[pygame.Surface] = None
+    if deck_back_surf is not None:
+        deck_back_card_surf = pygame.transform.smoothscale(deck_back_surf, (CARD_W, CARD_H))
 
     _bg_paths = [
         os.path.join(_src_dir, "background.png"),
@@ -756,8 +862,39 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                 else:
                     draw_pixel_border(screen, r, PAPER_DARK, GOLD)
 
+            # Explainable documentation: preview next card above deck (half transparent, phasing 50–70 alpha)
+            has_explainable = any(c and c.key == "explainable_documentation" for c in state.active_slots)
+            if has_explainable and deck and not deck_draw_in_progress:
+                peek_card = deck[-1]
+                peek_rect = pygame.Rect(deck_rect.centerx - ACTIVE_CARD_W // 2, deck_rect.y - ACTIVE_CARD_H - 8, ACTIVE_CARD_W, ACTIVE_CARD_H)
+                phase = 0.5 + 0.5 * math.sin(frame * 0.08)
+                alpha = int(50 + 20 * phase)
+                peek_surf = pygame.Surface((ACTIVE_CARD_W, ACTIVE_CARD_H), pygame.SRCALPHA)
+                if peek_card.art and peek_card.art in card_art_surfs:
+                    scaled = pygame.transform.smoothscale(card_art_surfs[peek_card.art], (ACTIVE_CARD_W, ACTIVE_CARD_H))
+                    scaled.set_alpha(alpha)
+                    peek_surf.blit(scaled, (0, 0))
+                else:
+                    peek_surf.fill((240, 236, 228, alpha))
+                    draw_pixel_border(peek_surf, pygame.Rect(0, 0, ACTIVE_CARD_W, ACTIVE_CARD_H), PAPER_DARK, GOLD)
+                screen.blit(peek_surf, peek_rect)
+
+            # Red warning: flash red mask + single-line compact text above deck
+            if deck_warning_frames > 0:
+                mask_inset = 4
+                pulse = 0.5 + 0.5 * math.sin(2.0 * math.pi * (deck_warning_frames / 25))
+                red_alpha = int(100 * pulse + 100)
+                deck_mask = pygame.Surface((CARD_W - mask_inset * 2, CARD_H - mask_inset * 2), pygame.SRCALPHA)
+                deck_mask.fill((220, 72, 72, red_alpha))
+                screen.blit(deck_mask, (deck_rect.x + mask_inset, deck_rect.y + mask_inset))
+                warn_text = "Max 3 cards at hand" if deck_warning_hand_full else "No cards to draw."
+                warn = rtxt(font_tiny, warn_text, RED, bold_px=1)
+                warn.set_colorkey((0, 0, 0))
+                wx = deck_rect.centerx - warn.get_width() // 2
+                wy = max(0, dly - warn.get_height() - 2)
+                screen.blit(warn, (wx, wy))
             # When "click to draw" hint is visible: flashing dark mask over deck (inset a few px on each side)
-            if pending_draw and pending_draw_frames >= PENDING_DRAW_HINT_FRAMES:
+            elif pending_draw and pending_draw_frames >= PENDING_DRAW_HINT_FRAMES:
                 t = pending_draw_frames - PENDING_DRAW_HINT_FRAMES
                 hint_period = 60
                 pulse = 0.5 + 0.5 * math.sin(2.0 * math.pi * (t / hint_period))
@@ -767,8 +904,8 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                 deck_mask.fill((0, 0, 0, mask_alpha))
                 screen.blit(deck_mask, (deck_rect.x + mask_inset, deck_rect.y + mask_inset))
 
-            # Draw hint: text + left-pointing arrow; flash synced with mask; text dims more (but less than mask)
-            if pending_draw and pending_draw_frames >= PENDING_DRAW_HINT_FRAMES:
+            # Draw hint: text + left-pointing arrow (only when not showing red warning)
+            if deck_warning_frames == 0 and pending_draw and pending_draw_frames >= PENDING_DRAW_HINT_FRAMES:
                 t = pending_draw_frames - PENDING_DRAW_HINT_FRAMES
                 hint_period = 60
                 pulse = 0.5 + 0.5 * math.sin(2.0 * math.pi * (t / hint_period))
@@ -789,66 +926,32 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                 pygame.draw.polygon(arrow_surf, (*GOLD, text_alpha), pts)
                 screen.blit(arrow_surf, (ax - 1, ay - 1))
 
-            # Collected pile area (right side); max 3 cards visible stacked
-            label = rtxt(font_tiny, "COLLECTED", GOLD, bold_px=1)
-            lx = collected_rect.centerx - label.get_width() // 2
-            ly = collected_rect.y - label.get_height() - 6
-            # subtle shadow for visibility
-            shadow = rtxt(font_tiny, "COLLECTED", INK, bold_px=1)
-            shadow.set_alpha(160)
-            screen.blit(shadow, (lx + 1, ly + 1))
-            screen.blit(label, (lx, ly))
-
-            if not collected:
-                draw_pixel_border(screen, collected_rect, FELT_DARK, GOLD)
+            # Trash: bottom right (icon only, no label)
+            if trash_card_surf is not None:
+                screen.blit(trash_card_surf, trash_rect)
             else:
-                max_show = 3
-                show = collected[-max_show:]
-                for j, card in enumerate(show):
-                    dx = -2 * (len(show) - 1 - j)
-                    dy = -2 * (len(show) - 1 - j)
-                    r = pygame.Rect(collected_rect.x + dx, collected_rect.y + dy, CARD_W, CARD_H)
-                    outer = card_border_color(card)
-                    if card.art and card.art in card_art_surfs:
-                        screen.blit(card_art_surfs[card.art], r)
-                        draw_pixel_frame(screen, r, outer, PAPER_DARK)
-                    else:
-                        draw_pixel_border(screen, r, PAPER_DARK, outer)
+                draw_pixel_border(screen, trash_rect, FELT_DARK, (140, 80, 60))
 
     def draw_intro() -> None:
         draw_tiled_background()
         draw_pixel_border(screen, pygame.Rect(8, 8, LOW_W - 16, LOW_H - 16), FELT_DARK, GOLD)
-
-        lines = [
-            "The stakes are high. You are a CEO of an AI startup.",
-            "",
-            "",
-            "",
-            "There are four stats that will determine the success of your company:",
-            "- Transparency: How transparent your AI is to the public.",
-            "- Trust: How trusted your AI is by the public.",
-            "- Fairness: How fair your AI is to the public.",
-            "- Automation: How automated your AI is.",
-            "",
-            "",
-            "",
-            "You will be given a deck of cards. Each card will have a stat and a value.",
-            "Select up to 3 cards, LOCK IN once ready. If any stat goes below 0, you lose.",
-            "Hover cards to see effects. Meet the requirement of the round to advance.",
-            "",
-            "",
-            "",
-            "Be careful! The cards you collect will matter..."
-        ]
-        y = 52
-        line_step = font_small.get_linesize() + 5
-        for ln in lines:
-            for sub in wrap_text(ln, LOW_W - 28):
-                rr = rtxt(font_small, sub, (210, 208, 198), bold_px=0)
-                screen.blit(rr, (14, y))
-                y += line_step
-            y += 2
-
+        scenario_name = get_contract_name(state.scenario_key)
+        objective_text = get_scenario_objective_text(state.scenario_key)
+        title = rtxt(font_big, "DEPLOYMENT SCENARIO", GOLD)
+        screen.blit(title, ((LOW_W - title.get_width()) // 2, 24))
+        sub = rtxt(font_small, scenario_name, PAPER)
+        screen.blit(sub, ((LOW_W - sub.get_width()) // 2, 52))
+        y = 76
+        line_step = font_small.get_linesize() + 4
+        for line in wrap_text(objective_text, LOW_W - 28):
+            rr = rtxt(font_small, line, (210, 208, 198), bold_px=0)
+            screen.blit(rr, (20, y))
+            y += line_step
+        y += 12
+        for line in wrap_text("You have 12 rounds. Build your stats with Active cards. Click deck to draw & advance. Max 3 in hand. Meet the objective by round 12 to win.", LOW_W - 28):
+            rr = rtxt(font_tiny, line, (200, 198, 188), bold_px=0)
+            screen.blit(rr, (20, y))
+            y += line_step
         tip = rtxt(font_small, "Click anywhere to begin. ESC quits.", GOLD)
         screen.blit(tip, (14, LOW_H - 20))
 
@@ -915,17 +1018,23 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         nonlocal game_over_retry_rect
         draw_tiled_background()
         draw_pixel_border_alpha(screen, pygame.Rect(40, 60, LOW_W - 80, 180), FELT_DARK, GOLD, fill_alpha=235)
-        failed = constraint_failed or hard_loss()
-        if constraint_failed:
-            msg = "RUN FAILED"
-            sub = message
-        elif hard_loss():
-            msg = "RUN FAILED"
-            sub = "A stat dropped below zero."
+        if game_over_from_contract_eval:
+            failed = not contract_eval_passed
+            msg = "DEPLOYMENT APPROVED" if contract_eval_passed else "DEPLOYMENT DENIED"
+            sub = "You met the contract requirements." if contract_eval_passed else "You did not meet the deployment contract requirements."
+            title_color = GOLD if contract_eval_passed else RED
         else:
-            msg = "RUN COMPLETE"
-            sub = "Your choices outlive your dashboard."
-        title_color = RED if failed else GOLD
+            failed = constraint_failed or hard_loss()
+            if constraint_failed:
+                msg = "RUN FAILED"
+                sub = message
+            elif hard_loss():
+                msg = "RUN FAILED"
+                sub = "A stat dropped below zero."
+            else:
+                msg = "RUN COMPLETE"
+                sub = "Your choices outlive your dashboard."
+            title_color = RED if failed else GOLD
         big = rtxt(font_big, msg, title_color)
         screen.blit(big, ((LOW_W - big.get_width()) // 2, 80))
         yy = 118
@@ -960,7 +1069,7 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                     screen.blit(t, (20, y))
                     y += 14
                 y += 2
-            stats_line = f"Your run: Trust {state.trust}  Automation {state.automation}  Fairness {state.fairness}  Transparency {state.transparency}"
+            stats_line = f"Transparency {state.transparency}  Stability {state.stability}  Automation {state.automation}  Generalizability {state.generalizability}  Integrity {state.integrity}"
             st = font_small.render(stats_line, True, GOLD)
             screen.blit(st, (20, y))
             y += 24
@@ -1022,23 +1131,6 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         lmx, lmy = mx // SCALE, my // SCALE
         mouse_low = (lmx, lmy)
 
-        # Compute play button hitbox from actual drawn rect (so clicks work even before first draw).
-        if play_btn_surf is not None:
-            play_btn_hit_rect = play_btn_surf.get_rect(center=btn_play.rect.center)
-        else:
-            play_btn_hit_rect = btn_play.rect.copy()
-
-        # buttons enabled rules (must have drawn cards this round before playing)
-        btn_play.enabled = (
-            (not hard_loss())
-            and (state.round_idx <= state.rounds_total)
-            and (len(selected) > 0)
-            and (not played_this_round)
-            and (not pending_draw)
-            and (not deck_draw_in_progress)
-            and (len(collect_anim_list) == 0)
-        )
-
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -1048,10 +1140,10 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if mode == "menu":
                     if menu_play_rect and menu_play_rect.collidepoint(mouse_low):
+                        contracts = get_contracts()
+                        if contracts:
+                            state.scenario_key = rng.choice([c["key"] for c in contracts])
                         mode = "intro"
-                        start_round()
-                        message = "Select up to 3 cards. PLAY commits and scores the round."
-                        story_line = round_story(state.round_idx)
                     elif menu_credits_rect and menu_credits_rect.collidepoint(mouse_low):
                         mode = "credits"
                     # Settings: placeholder, no-op
@@ -1060,8 +1152,10 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                     mode = "menu"
                     continue
                 if mode == "intro":
+                    start_round()
+                    recompute_stats_from_active(state)
+                    message = "Click deck to draw & advance. Max 5 in hand. Active cards = your stats."
                     mode = "game"
-                    message = "Play up to 3 cards. LOCK IN once ready."
                     continue
                 if mode == "over" and game_over_retry_rect and game_over_retry_rect.collidepoint(mouse_low):
                     state = State()
@@ -1070,26 +1164,11 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                     played_this_round = False
                     played_effects_this_round.clear()
                     constraint_failed = False
-                    message = "Play up to 3 cards. LOCK IN once ready."
-                    story_line = round_story(state.round_idx)
-                    mode = "game"
+                    game_over_from_contract_eval = False
+                    contract_eval_passed = False
+                    hidden_hand_index = None
+                    mode = "menu"
                     collect_anim_list.clear()
-                    start_round()
-                    continue
-                if mode == "boss":
-                    questions = get_final_stage_questions()
-                    if boss_step == 0:
-                        boss_step = 1
-                        continue
-                    if 1 <= boss_step <= len(questions):
-                        for i, rect in enumerate(boss_option_rects):
-                            if rect.collidepoint(mouse_low) and i < len(questions[boss_step - 1]["options"]):
-                                opt = questions[boss_step - 1]["options"][i]
-                                boss_readiness_deltas.append(opt["readiness_delta"])
-                                boss_step += 1
-                                if boss_step > len(questions):
-                                    boss_step = len(questions) + 1
-                                break
                     continue
                 if hard_loss() or state.round_idx > state.rounds_total or mode != "game":
                     continue
@@ -1097,67 +1176,174 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                     # During deck animation, ignore card selection/play.
                     continue
 
-                # Deck click: draw cards when waiting for draw
+                # Deck click: only draw when hand has fewer than 3 cards and deck has cards
                 if pending_draw and deck_rect.collidepoint(mouse_low):
-                    # Pop cards into an animation buffer (do not add to hand until each step completes).
-                    deck_draw_buffer = []
-                    for _ in range(draw_per_round):
-                        if len(deck_draw_buffer) >= draw_per_round:
-                            break
-                        if len(hand) + len(deck_draw_buffer) >= hand_limit:
-                            break
-                        if not deck:
-                            break
-                        deck_draw_buffer.append(deck.pop())
-
-                    pending_draw = False
-                    pending_draw_frames = 0
-                    deck_draw_step_index = 0
-                    deck_draw_in_progress = True
-                    deck_anim_frames = DECK_DRAW_STEP_FRAMES
+                    can_draw = len(hand) < hand_limit and len(deck) > 0
+                    if not can_draw:
+                        deck_warning_frames = 45
+                        deck_warning_hand_full = len(hand) >= hand_limit
+                    else:
+                        deck_draw_start_hand_len = len(hand)
+                        deck_draw_start_had_black_box = any(c and c.key == "black_box_model" for c in state.active_slots)
+                        deck_draw_buffer = []
+                        for _ in range(draw_per_round):
+                            if len(deck_draw_buffer) >= draw_per_round:
+                                break
+                            if len(hand) + len(deck_draw_buffer) >= hand_limit:
+                                break
+                            if not deck:
+                                break
+                            deck_draw_buffer.append(deck.pop())
+                        pending_draw = False
+                        pending_draw_frames = 0
+                        deck_draw_step_index = 0
+                        deck_draw_in_progress = True
+                        deck_anim_frames = DECK_DRAW_STEP_FRAMES
+                        end_round_after_draw = True
                     continue
 
-                # Card clicks
+                # Start drag from hand or active
                 rects = card_rects()
                 for i, r in enumerate(rects):
                     if r.collidepoint(mouse_low):
-                        if i in selected:
-                            selected.remove(i)
-                        else:
-                            if len(selected) < play_limit:
-                                selected.append(i)
+                        dragging_hand_idx = i
+                        drag_start_pos = mouse_low
                         break
+                if dragging_hand_idx is None:
+                    slot_rects = active_slot_rects()
+                    for i, r in enumerate(slot_rects):
+                        if i < len(state.active_slots) and state.active_slots[i] and r.collidepoint(mouse_low):
+                            dragging_active_idx = i
+                            break
 
-                # Button clicks
-                if btn_play.enabled and (play_btn_hit_rect or btn_play.rect).collidepoint(mouse_low):
-                    # Play selected cards: apply effects, then remove them from hand.
-                    # (Balatro-ish commitment: once played, they’re gone.)
-                    # Play order is left->right, so the rightmost selected becomes "last played".
-                    sel_lr = sorted(selected)
-                    cards_to_play = [hand[i] for i in sel_lr]
-                    rects = card_rects()
-                    for card in cards_to_play:
-                        state.apply(card.effects)
-                        discard.append(card)
-                    for idx, card in zip(sel_lr, cards_to_play):
-                        start_r = rects[idx].copy()
-                        collect_anim_list.append((card, start_r, 0.0))
-                    for idx in sorted(selected, reverse=True):
-                        hand.pop(idx)
-                    selected = []
-                    played_this_round = True
-                    message = "Committed. Scoring round..."
-                    end_round()
+            if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                if mode == "game":
+                    if dragging_hand_idx is not None:
+                        if dragging_hand_idx < len(hand):
+                            card = hand[dragging_hand_idx]
+                            if trash_rect.collidepoint(mouse_low):
+                                if dragging_hand_idx == hidden_hand_index:
+                                    hidden_hand_index = None
+                                elif hidden_hand_index is not None and dragging_hand_idx < hidden_hand_index:
+                                    hidden_hand_index -= 1
+                                on_card_trashed(state, card)
+                                hand.pop(dragging_hand_idx)
+                            else:
+                                slot_rects = active_slot_rects()
+                                dropped_on_active = False
+                                cap = get_active_slot_capacity(state)
+                                conflict_slot = None
+                                # Black box rule: the currently hidden hand card cannot be placed into ACTIVE.
+                                if dragging_hand_idx == hidden_hand_index:
+                                    for slot_i, sr in enumerate(slot_rects):
+                                        if slot_i >= cap:
+                                            continue
+                                        if sr.collidepoint(mouse_low) and slot_i < len(state.active_slots):
+                                            active_slot_conflict_flash = slot_i
+                                            active_slot_conflict_frames = 60
+                                            break
+                                    dropped_on_active = True
+                                else:
+                                    if card.key in ("real_time_api", "batch_processing"):
+                                        other = "batch_processing" if card.key == "real_time_api" else "real_time_api"
+                                        for j in range(cap):
+                                            oc = state.active_slots[j] if j < len(state.active_slots) else None
+                                            if oc and oc.key == other:
+                                                conflict_slot = j
+                                                break
+                                    if conflict_slot is not None:
+                                        active_slot_conflict_flash = conflict_slot
+                                        active_slot_conflict_frames = 60
+                                    else:
+                                        for slot_i, sr in enumerate(slot_rects):
+                                            if slot_i >= cap:
+                                                continue
+                                            if sr.collidepoint(mouse_low) and slot_i < len(state.active_slots):
+                                                n_active = sum(1 for c in state.active_slots if c is not None)
+                                                if n_active < cap:
+                                                    first_empty = next((j for j in range(cap) if state.active_slots[j] is None), slot_i)
+                                                    state.active_slots[first_empty] = card
+                                                    if hidden_hand_index is not None and dragging_hand_idx < hidden_hand_index:
+                                                        hidden_hand_index -= 1
+                                                    hand.pop(dragging_hand_idx)
+                                                    on_card_added_to_active(state, first_empty, card)
+                                                    recompute_stats_from_active(state)
+                                                    dropped_on_active = True
+                                                break
+                                if not dropped_on_active and conflict_slot is None:
+                                    rects = card_rects()
+                                    if dragging_hand_idx < len(rects) and rects[dragging_hand_idx].collidepoint(mouse_low):
+                                        conflict_slot_click = None
+                                        if card.key in ("real_time_api", "batch_processing"):
+                                            other = "batch_processing" if card.key == "real_time_api" else "real_time_api"
+                                            for j in range(cap):
+                                                oc = state.active_slots[j] if j < len(state.active_slots) else None
+                                                if oc and oc.key == other:
+                                                    conflict_slot_click = j
+                                                    break
+                                        if conflict_slot_click is not None:
+                                            active_slot_conflict_flash = conflict_slot_click
+                                            active_slot_conflict_frames = 60
+                                        else:
+                                            cap = get_active_slot_capacity(state)
+                                            n_active = sum(1 for c in state.active_slots if c is not None)
+                                            if n_active < cap:
+                                                first_empty = next((j for j in range(cap) if state.active_slots[j] is None), 0)
+                                                state.active_slots[first_empty] = card
+                                                if hidden_hand_index is not None and dragging_hand_idx < hidden_hand_index:
+                                                    hidden_hand_index -= 1
+                                                hand.pop(dragging_hand_idx)
+                                                on_card_added_to_active(state, first_empty, card)
+                                                recompute_stats_from_active(state)
+                        dragging_hand_idx = None
+                    elif dragging_active_idx is not None:
+                        if dragging_active_idx < len(state.active_slots) and state.active_slots[dragging_active_idx]:
+                            card = state.active_slots[dragging_active_idx]
+                            slot_rects = active_slot_rects()
+                            same_slot = slot_rects[dragging_active_idx].collidepoint(mouse_low)
+                            if hand_drop_rect.collidepoint(mouse_low) and len(hand) < hand_limit:
+                                hand.append(card)
+                                state.active_slots[dragging_active_idx] = None
+                                on_card_removed_from_active(state, dragging_active_idx, card)
+                                recompute_stats_from_active(state)
+                            elif trash_rect.collidepoint(mouse_low):
+                                state.active_slots[dragging_active_idx] = None
+                                on_card_removed_from_active(state, dragging_active_idx, card)
+                                on_card_trashed(state, card)
+                                recompute_stats_from_active(state)
+                            elif same_slot and len(hand) < hand_limit:
+                                # Click (no drag) on active card: return to hand with animation
+                                state.active_slots[dragging_active_idx] = None
+                                on_card_removed_from_active(state, dragging_active_idx, card)
+                                recompute_stats_from_active(state)
+                                start_r = slot_rects[dragging_active_idx].copy()
+                                active_to_hand_anim_list.append((card, start_r, 0.0, dragging_active_idx))
+                        dragging_active_idx = None
 
-        # Hover detection (only in game mode)
+        # Hover detection (only in game mode, when not dragging)
         hover_idx = None
-        if mode == "game":
+        hover_active_idx = None
+        hover_peek_card = None
+        if mode == "game" and dragging_hand_idx is None and dragging_active_idx is None:
             if not deck_draw_in_progress:
-                rects = card_rects()
-                for i, r in enumerate(rects):
-                    if r.collidepoint(mouse_low):
-                        hover_idx = i
-                        break
+                # Explainable documentation: next-card preview above deck
+                has_explainable = any(c and c.key == "explainable_documentation" for c in state.active_slots)
+                if has_explainable and deck:
+                    peek_rect = pygame.Rect(deck_rect.centerx - ACTIVE_CARD_W // 2, deck_rect.y - ACTIVE_CARD_H - 8, ACTIVE_CARD_W, ACTIVE_CARD_H)
+                    if peek_rect.collidepoint(mouse_low):
+                        hover_peek_card = deck[-1]
+                if hover_peek_card is None:
+                    slot_rects = active_slot_rects()
+                    for i, r in enumerate(slot_rects):
+                        if r.collidepoint(mouse_low) and i < len(state.active_slots) and state.active_slots[i]:
+                            hover_active_idx = i
+                            break
+                    if hover_active_idx is None:
+                        rects = card_rects()
+                        for i, r in enumerate(rects):
+                            if r.collidepoint(mouse_low):
+                                hover_idx = i
+                                break
 
         if mode == "menu":
             draw_menu()
@@ -1165,22 +1351,41 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             draw_credits()
         elif mode == "intro":
             draw_intro()
-        elif mode == "boss":
-            draw_boss()
         elif state.round_idx > state.rounds_total or hard_loss() or mode == "over":
             draw_game_over()
         else:
             draw_bg()
             draw_stats()
+            draw_active_row()
             draw_message()
             draw_hover_panel()
             draw_cards()
-
-            # PLAY button only when at least one card is selected
-            if len(selected) > 0:
-                hover_play = play_btn_hit_rect.collidepoint(mouse_low)
-                draw_play_button(hover_play)
-
+            # Dragged card follows cursor
+            if dragging_hand_idx is not None and dragging_hand_idx < len(hand):
+                c = hand[dragging_hand_idx]
+                dr = pygame.Rect(lmx - CARD_W // 2, lmy - CARD_H // 2, CARD_W, CARD_H)
+                outer = card_border_color(c)
+                if dragging_hand_idx == hidden_hand_index and deck_back_card_surf is not None:
+                    screen.blit(deck_back_card_surf, dr)
+                    draw_pixel_frame(screen, dr, outer, PAPER_DARK)
+                elif c.art and c.art in card_art_surfs:
+                    screen.blit(card_art_surfs[c.art], dr)
+                    draw_pixel_frame(screen, dr, outer, PAPER_DARK)
+                else:
+                    draw_pixel_border(screen, dr, PAPER, outer)
+                    pip = rtxt(font_small, c.suit[0].upper(), outer, bold_px=0)
+                    screen.blit(pip, (dr.x + 4, dr.y + 3))
+            elif dragging_active_idx is not None and dragging_active_idx < len(state.active_slots) and state.active_slots[dragging_active_idx]:
+                c = state.active_slots[dragging_active_idx]
+                dr = pygame.Rect(lmx - CARD_W // 2, lmy - CARD_H // 2, CARD_W, CARD_H)
+                outer = card_border_color(c)
+                if c.art and c.art in card_art_surfs:
+                    screen.blit(card_art_surfs[c.art], dr)
+                    draw_pixel_frame(screen, dr, outer, PAPER_DARK)
+                else:
+                    draw_pixel_border(screen, dr, PAPER, outer)
+                    pip = rtxt(font_small, c.suit[0].upper(), outer, bold_px=0)
+                    screen.blit(pip, (dr.x + 4, dr.y + 3))
         pygame.transform.scale(screen, (W, H), window)
         pygame.display.flip()
 
@@ -1194,6 +1399,16 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             else:
                 collect_anim_list[i] = (card, start_r, progress)
 
+        # Advance active-to-hand animation: add to hand when progress >= 1
+        for i in range(len(active_to_hand_anim_list) - 1, -1, -1):
+            card, start_r, progress, slot_idx = active_to_hand_anim_list[i]
+            progress += 1.0 / active_to_hand_frames
+            if progress >= 1.0:
+                hand.append(card)
+                active_to_hand_anim_list.pop(i)
+            else:
+                active_to_hand_anim_list[i] = (card, start_r, progress, slot_idx)
+
         if deck_draw_in_progress and deck_anim_frames > 0:
             deck_anim_frames -= 1
         if deck_draw_in_progress and deck_anim_frames <= 0:
@@ -1203,12 +1418,28 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                 deck_draw_step_index += 1
 
             if deck_draw_step_index >= len(deck_draw_buffer):
+                # Black box model:
+                # - The hidden card is revealed only when the next deck draw completes.
+                # - If we are continuing the hidden cycle, we hide one of the newly-drawn cards instead.
+                # - Even if the black box model card was removed from ACTIVE, the previously hidden card
+                #   should stay hidden until this draw completes.
+                should_continue_hidden_cycle = deck_draw_start_had_black_box or hidden_hand_index is not None
+                if should_continue_hidden_cycle and deck_draw_start_hand_len < len(hand):
+                    hidden_hand_index = random.choice(range(deck_draw_start_hand_len, len(hand)))
+                else:
+                    hidden_hand_index = None
                 deck_draw_in_progress = False
                 deck_draw_buffer = []
                 deck_anim_frames = 0
+                if end_round_after_draw:
+                    end_round_after_draw = False
+                    end_round()
             else:
                 deck_anim_frames = DECK_DRAW_STEP_FRAMES
-        # (Removed) trash flash animation
+        if deck_warning_frames > 0:
+            deck_warning_frames -= 1
+        if active_slot_conflict_frames > 0:
+            active_slot_conflict_frames -= 1
         if pending_draw:
             pending_draw_frames += 1
 
