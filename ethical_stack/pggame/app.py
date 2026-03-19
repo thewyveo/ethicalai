@@ -132,7 +132,8 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
     active_margin_right = 16
     msg_text_y = stat_bar.bottom + 6
     msg_max_w = LOW_W - 24
-    hover_box = pygame.Rect(8, msg_text_y + 46, LOW_W // 2 - 16, 58)
+    # Hover panel should not overlap the 4-line objective block.
+    hover_box = pygame.Rect(8, msg_text_y + 58, LOW_W // 2 - 16, 58)
 
     # Card size (small so they fit the window); art is smooth-scaled to this for readability.
     _pggame_dir = os.path.dirname(os.path.abspath(__file__))
@@ -202,6 +203,7 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
 
     message = "Click deck to draw & advance. Max 3 in hand. Active cards = your stats."
     story_line = "Objective will be set when you start."
+    objective_setting_line = ""
     objective_stats_line = ""
     mode: str = "menu"  # menu -> intro -> game -> over
     hover_idx: int | None = None
@@ -223,12 +225,12 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             hand.append(deck.pop())
 
     def start_round() -> None:
-        nonlocal selected, story_line, objective_stats_line, message, played_this_round, deck_anim_frames, deck, discard, pending_draw, pending_draw_frames
+        nonlocal selected, story_line, objective_setting_line, objective_stats_line, message, played_this_round, deck_anim_frames, deck, discard, pending_draw, pending_draw_frames
         nonlocal deck_draw_in_progress, deck_draw_buffer, deck_draw_step_index
         selected = []
         played_this_round = False
         played_effects_this_round.clear()
-        story_line, objective_stats_line = get_scenario_objective_lines(state.scenario_key)
+        story_line, objective_setting_line, objective_stats_line = get_scenario_objective_lines(state.scenario_key)
         if state.round_idx == 13:
             return
         deck = get_deck_for_round(rng, state.round_idx, cards_pool)
@@ -239,7 +241,7 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         deck_anim_frames = 0
         pending_draw = True
         pending_draw_frames = 0
-        message = "Draw from deck. Drag to TRASH or ACTIVE. End round when ready."
+        message = "Drag cards to TRASH or ACTIVE."
 
     def hard_loss() -> bool:
         return (
@@ -447,30 +449,33 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         return lines
 
     def draw_message() -> None:
-        # Line 1: Objective: scenario name. Line 2: compact stats. Then message.
+        # Line 1: Objective: [name]
+        # Line 2: short setting/context (very concise)
+        # Line 3: requirements (red)
+        # Line 4: drag instruction (gold)
         x, y = 12, msg_text_y
         line_step = font_tiny.get_linesize() + 2
-        for line in wrap_text(story_line, msg_max_w):
-            t = rtxt(font_tiny, line, PAPER)
-            shadow_t = rtxt(font_tiny, line, INK)
+
+        def draw_line(text: str, color: Tuple[int, int, int], y0: int) -> None:
+            t = rtxt(font_tiny, text, color, bold_px=0)
+            shadow_t = rtxt(font_tiny, text, INK, bold_px=0)
             shadow_t.set_alpha(160)
-            screen.blit(shadow_t, (x + 1, y + 1))
-            screen.blit(t, (x, y))
+            screen.blit(shadow_t, (x + 1, y0 + 1))
+            screen.blit(t, (x, y0))
+
+        if story_line:
+            draw_line(story_line, PAPER, y)
+            y += line_step
+        if objective_setting_line:
+            draw_line(objective_setting_line, (200, 198, 188), y)
             y += line_step
         if objective_stats_line:
-            st = rtxt(font_tiny, objective_stats_line, RED, bold_px=0)
-            shadow_st = rtxt(font_tiny, objective_stats_line, INK)
-            shadow_st.set_alpha(160)
-            screen.blit(shadow_st, (x + 1, y + 1))
-            screen.blit(st, (x, y))
+            draw_line(objective_stats_line, RED, y)
             y += line_step
         if message:
+            # Message is expected to be short; wrap only if needed.
             for line in wrap_text(message, msg_max_w):
-                m = rtxt(font_tiny, line, GOLD)
-                shadow_m = rtxt(font_tiny, line, INK)
-                shadow_m.set_alpha(160)
-                screen.blit(shadow_m, (x + 1, y + 1))
-                screen.blit(m, (x, y))
+                draw_line(line, GOLD, y)
                 y += line_step
 
     def draw_hover_panel() -> None:
@@ -744,8 +749,12 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                 pip = rtxt(font_small, card.suit[0].upper(), outer, bold_px=0)
                 screen.blit(pip, (anim_r.x + 4, anim_r.y + 3))
 
+    TRASH_SCALE = 1.25
+    TRASH_CARD_W, TRASH_CARD_H = int(CARD_W * TRASH_SCALE), int(CARD_H * TRASH_SCALE)
     deck_rect = pygame.Rect(10, deck_base_y, CARD_W, CARD_H)
-    trash_rect = pygame.Rect(LOW_W - 10 - CARD_W, deck_base_y, CARD_W, CARD_H)
+    # Trash is larger than hand/deck cards; raise it so it doesn't overflow the bottom.
+    trash_y = deck_base_y - (TRASH_CARD_H - CARD_H) // 2
+    trash_rect = pygame.Rect(LOW_W - 10 - TRASH_CARD_W, trash_y, TRASH_CARD_W, TRASH_CARD_H)
     # Hand drop zone: center row where hand cards sit (max 3); drop active card here to return to hand.
     _hand_gap = 8
     _hand_total_w = hand_limit * CARD_W + (hand_limit - 1) * _hand_gap
@@ -753,8 +762,8 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
     deck_anim_frames = 0
     trash_flash_frames = 0
 
-    # Active row: 5 or 6 slots (6 when carbon_footprint in active), smaller cards
-    ACTIVE_CARD_W, ACTIVE_CARD_H = 40, 52
+    # Active row: 5 or 6 slots (6 when carbon_footprint in active)
+    ACTIVE_CARD_W, ACTIVE_CARD_H = int(40 * 1.07), int(52 * 1.07)
     active_gap = 6
 
     def active_slot_rects() -> List[pygame.Rect]:
@@ -799,7 +808,7 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         if os.path.isfile(_path):
             try:
                 trash_surf = pygame.image.load(_path).convert_alpha()
-                trash_card_surf = pygame.transform.smoothscale(trash_surf, (CARD_W, CARD_H))
+                trash_card_surf = pygame.transform.smoothscale(trash_surf, (TRASH_CARD_W, TRASH_CARD_H))
                 break
             except Exception:
                 pass

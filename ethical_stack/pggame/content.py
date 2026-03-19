@@ -63,22 +63,31 @@ def get_contract_name(contract_key: Optional[str]) -> str:
 
 
 def get_scenario_objective_text(contract_key: Optional[str]) -> str:
-    """Single-line fallback; prefer get_scenario_objective_lines for two-line display."""
-    line1, line2 = get_scenario_objective_lines(contract_key)
-    return line1 + " " + line2
+    """Single-line fallback; prefer get_scenario_objective_lines for multi-line display."""
+    line1, line2, line3 = get_scenario_objective_lines(contract_key)
+    return line1 + " " + line2 + " " + line3
 
 
-def get_scenario_objective_lines(contract_key: Optional[str]) -> Tuple[str, str]:
-    """Line 1: 'Objective: ' + scenario name only. Line 2: stats only (e.g. A ≥ 8, S ≥ 6)."""
+def get_scenario_objective_lines(contract_key: Optional[str]) -> Tuple[str, str, str]:
+    """Line 1: objective title. Line 2: short setting explanation. Line 3: compact requirements (e.g. A > 8, S > 6)."""
     name = get_contract_name(contract_key)
     req = get_contract_requirements(contract_key)
     line1 = f"Objective: {name}"
     if not req:
-        return line1, "Meet the deployment requirements."
-    short = {"transparency": "T", "stability": "S", "automation": "A", "generalizability": "G", "integrity": "I"}
-    parts = [f"{short.get(s, s)} ≥ {val}" for s, val in req.items()]
-    line2 = ", ".join(parts)
-    return line1, line2
+        return line1, "Meet the deployment thresholds.", "Meet the deployment requirements."
+
+    setting = {
+        "healthcare": "Patient safety first: raise stability & integrity.",
+        "startup": "Needs to be fast and credible: automation & integrity.",
+        "government": "Reliability: emphasize transparency & integrity.",
+        "social_media": "Scale responsibly: push automation & generalizability.",
+        "defense": "Operational readiness: prioritize automation & stability.",
+    }.get(contract_key, "Tune your active deck to the contract thresholds.")
+
+    short = {"transparency": "Tra", "stability": "Sta", "automation": "Aut", "generalizability": "Gen", "integrity": "Int"}
+    parts = [f"{short.get(s, s)} > {val}" for s, val in req.items()]
+    line3 = ", ".join(parts)
+    return line1, setting, line3
 
 
 def contract_fulfilled(state: State, contract_key: Optional[str]) -> bool:
@@ -154,35 +163,35 @@ def _card(
 def _card_definitions() -> Dict[str, Dict[str, Any]]:
     return {
         "human_oversight": {"name": "Human Oversight", "text": "A person can say no. Reduces automation, increases transparency.", "effects": {"automation": -1, "transparency": 1}, "passive": None},
-        "full_automation": {"name": "Full Automation", "text": "No humans. ++automation, -transparency, -stability.", "effects": {"automation": 2, "transparency": -1, "stability": -1}, "passive": None},
-        "user_communication": {"name": "User Communication", "text": "You tell people what the system does. +transparency.", "effects": {"transparency": 1}, "passive": None},
-        "explainable_documentation": {"name": "Explainable Documentation", "text": "Always see 1 card from next round.", "effects": {}, "passive": {"type": "peek_next_card"}},
-        "black_box_model": {"name": "Black Box Model", "text": "One card hidden each round until kept in active or hand. +++automation.", "effects": {"automation": 3}, "passive": {"type": "hidden_card"}},
+        "full_automation": {"name": "Full Automation", "text": "No humans, maximum efficiency.", "effects": {"automation": 2, "transparency": -1, "stability": -1}, "passive": None},
+        "user_communication": {"name": "User Communication", "text": "You set up support for your clients.", "effects": {"transparency": 1}, "passive": None},
+        "explainable_documentation": {"name": "Explainable Documentation", "text": "Preview 1 card from next round before drawing.", "effects": {}, "passive": {"type": "peek_next_card"}},
+        "black_box_model": {"name": "Black Box Model", "text": "Huge automation boost. But one card hidden each round.", "effects": {"automation": 3}, "passive": {"type": "hidden_card"}},
         "human_in_the_loop": {"name": "Human in the Loop", "text": "Lowest stat when placed in active gets +5. Recomputed if moved and re-added.", "effects": {}, "passive": {"type": "lowest_stat_boost", "amount": 5}},
-        "bias_fairness": {"name": "Bias Fairness", "text": "++integrity.", "effects": {"integrity": 2}, "passive": None},
-        "shadow_deployment": {"name": "Shadow Deployment", "text": "After each round, a random stat gets +1 or -1 (gambling).", "effects": {}, "passive": {"type": "random_stat_per_round"}},
-        "procurement_cut": {"name": "Procurement Cut", "text": "+automation, -stability, -integrity.", "effects": {"automation": 1, "stability": -1, "integrity": -1}, "passive": None},
-        "data_privacy": {"name": "Data Privacy", "text": "-generalizability, +integrity.", "effects": {"generalizability": -1, "integrity": 1}, "passive": None},
-        "safety_risk_control": {"name": "Safety Risk Control", "text": "++stability.", "effects": {"stability": 2}, "passive": None},
-        "alignment": {"name": "Alignment", "text": "+integrity, +generalizability.", "effects": {"integrity": 1, "generalizability": 1}, "passive": None},
-        "model_drift": {"name": "Model Drift", "text": "-integrity, -generalizability, -stability.", "effects": {"integrity": -1, "generalizability": -1, "stability": -1}, "passive": None},
-        "regularization": {"name": "Regularization", "text": "All negative stat debuffs are capped to -1.", "effects": {}, "passive": {"type": "cap_negatives"}},
-        "robustness_testing": {"name": "Robustness Testing", "text": "+generalizability, +stability.", "effects": {"generalizability": 1, "stability": 1}, "passive": None},
-        "local_explainability": {"name": "Local Explainability", "text": "+transparency, +integrity.", "effects": {"transparency": 1, "integrity": 1}, "passive": None},
-        "carbon_footprint": {"name": "Carbon Footprint", "text": "-integrity, but one extra active card slot.", "effects": {"integrity": -3}, "passive": {"type": "extra_slot"}},
-        "overfitting": {"name": "Overfitting", "text": "--generalizability, -integrity.", "effects": {"generalizability": -2, "integrity": -1}, "passive": None},
-        "neural_network": {"name": "Neural Network", "text": "—transparency, ++automation, +generalizability.", "effects": {"transparency": -3, "automation": 2, "generalizability": 1}, "passive": None},
-        "linear_regression": {"name": "Linear Regression", "text": "+transparency, +automation, —generalizability.", "effects": {"transparency": 1, "automation": 1, "generalizability": -3}, "passive": None},
-        "real_time_api": {"name": "Real Time API", "text": "-stability, -integrity. +1 automation each round until trashed. Cannot use with Batch Processing.", "effects": {"stability": -1, "integrity": -1}, "passive": {"type": "per_round_stat", "stat": "automation", "amount": 1}},
-        "batch_processing": {"name": "Batch Processing", "text": "+stability, -automation. +1 stability each round until trashed. Cannot use with Real Time API.", "effects": {"stability": 1, "automation": -1}, "passive": {"type": "per_round_stat", "stat": "stability", "amount": 1}},
-        "feature_engineering": {"name": "Feature Engineering", "text": "Chance for a card's effects (both + and -) to be doubled.", "effects": {}, "passive": {"type": "chance_double_effects"}},
-        "ab_testing": {"name": "AB Testing", "text": "++stability, +integrity.", "effects": {"stability": 2, "integrity": 1}, "passive": None},
-        "reward_hacking": {"name": "Reward Hacking", "text": "+automation, -integrity.", "effects": {"automation": 1, "integrity": -1}, "passive": None},
-        "hallucination": {"name": "Hallucination", "text": "-generalizability, -integrity.", "effects": {"generalizability": -1, "integrity": -1}, "passive": None},
-        "fine_tuning": {"name": "Fine-Tuning", "text": "Lowest stat when added to active gets a floor; cannot go further down.", "effects": {}, "passive": {"type": "lowest_stat_floor"}},
-        "ontology_integration": {"name": "Ontology Integration", "text": "+integrity, +stability.", "effects": {"integrity": 1, "stability": 1}, "passive": None},
-        "cross_validation": {"name": "Cross-Validation", "text": "+integrity.", "effects": {"integrity": 1}, "passive": None},
-        "catastrophic_forgetting": {"name": "Catastrophic Forgetting", "text": "—generalizability.", "effects": {"generalizability": -3}, "passive": None},
+        "bias_fairness": {"name": "Bias Fairness", "text": "The system is evaluated for fairness across groups.", "effects": {"integrity": 2}, "passive": None},
+        "shadow_deployment": {"name": "Shadow Deployment", "text": "After each round, a random stat gets +1 or -1.", "effects": {}, "passive": {"type": "random_stat_per_round"}},
+        "procurement_cut": {"name": "Procurement Cut", "text": "...", "effects": {"automation": 1, "stability": -1, "integrity": -1}, "passive": None},
+        "data_privacy": {"name": "Data Privacy", "text": "...", "effects": {"generalizability": -1, "integrity": 1}, "passive": None},
+        "safety_risk_control": {"name": "Safety Risk Control", "text": "...", "effects": {"stability": 2}, "passive": None},
+        "alignment": {"name": "Alignment", "text": "...", "effects": {"integrity": 1, "generalizability": 1}, "passive": None},
+        "model_drift": {"name": "Model Drift", "text": "...", "effects": {"integrity": -1, "generalizability": -1, "stability": -1}, "passive": None},
+        "regularization": {"name": "Regularization", "text": "...", "effects": {}, "passive": {"type": "cap_negatives"}},
+        "robustness_testing": {"name": "Robustness Testing", "text": "...", "effects": {"generalizability": 1, "stability": 1}, "passive": None},
+        "local_explainability": {"name": "Local Explainability", "text": "...", "effects": {"transparency": 1, "integrity": 1}, "passive": None},
+        "carbon_footprint": {"name": "Carbon Footprint", "text": "...", "effects": {"integrity": -3}, "passive": {"type": "extra_slot"}},
+        "overfitting": {"name": "Overfitting", "text": "...", "effects": {"generalizability": -2, "integrity": -1}, "passive": None},
+        "neural_network": {"name": "Neural Network", "text": "...", "effects": {"transparency": -3, "automation": 2, "generalizability": 1}, "passive": None},
+        "linear_regression": {"name": "Linear Regression", "text": "...", "effects": {"transparency": 1, "automation": 1, "generalizability": -3}, "passive": None},
+        "real_time_api": {"name": "Real Time API", "text": "+1 automation each round. Can't be used with Batch Processing.", "effects": {"stability": -1, "integrity": -1}, "passive": {"type": "per_round_stat", "stat": "automation", "amount": 1}},
+        "batch_processing": {"name": "Batch Processing", "text": "+1 stability each round. Can't be used with Real Time API.", "effects": {"stability": 1, "automation": -1}, "passive": {"type": "per_round_stat", "stat": "stability", "amount": 1}},
+        "feature_engineering": {"name": "Feature Engineering", "text": "One random card's stats are doubled.", "effects": {}, "passive": {"type": "chance_double_effects"}},
+        "ab_testing": {"name": "AB Testing", "text": "...", "effects": {"stability": 2, "integrity": 1}, "passive": None},
+        "reward_hacking": {"name": "Reward Hacking", "text": "...", "effects": {"automation": 1, "integrity": -1}, "passive": None},
+        "hallucination": {"name": "Hallucination", "text": "...", "effects": {"generalizability": -1, "integrity": -1}, "passive": None},
+        "fine_tuning": {"name": "Fine-Tuning", "text": "Lowest stat is floored, cannot go further down.", "effects": {}, "passive": {"type": "lowest_stat_floor"}},
+        "ontology_integration": {"name": "Ontology Integration", "text": "...", "effects": {"integrity": 1, "stability": 1}, "passive": None},
+        "cross_validation": {"name": "Cross-Validation", "text": "...", "effects": {"integrity": 1}, "passive": None},
+        "catastrophic_forgetting": {"name": "Catastrophic Forgetting", "text": "...", "effects": {"generalizability": -3}, "passive": None},
     }
 
 
