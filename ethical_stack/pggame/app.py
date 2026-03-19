@@ -153,6 +153,18 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             except Exception:
                 pass
 
+    # Credits: author logo (scaled to 1.5x hand card size).
+    author1_logo_surf: Optional[pygame.Surface] = None
+    _author1_path = os.path.join(_src_dir, "author1.png")
+    if os.path.isfile(_author1_path):
+        try:
+            _author1_surf = pygame.image.load(_author1_path).convert_alpha()
+            author1_logo_surf = pygame.transform.smoothscale(
+                _author1_surf, (int(CARD_W * 1.5), int(CARD_H * 1.5))
+            )
+        except Exception:
+            author1_logo_surf = None
+
     # cards.txt: number, color (r/w), key, rarity — border from card.suit
     cards_pool: List[Card] = load_cards_from_file(_cards_dir)
 
@@ -231,7 +243,7 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         played_this_round = False
         played_effects_this_round.clear()
         story_line, objective_setting_line, objective_stats_line = get_scenario_objective_lines(state.scenario_key)
-        if state.round_idx == 13:
+        if state.round_idx == 11:
             return
         deck = get_deck_for_round(rng, state.round_idx, cards_pool)
         discard = []
@@ -312,7 +324,7 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
 
         if state.round_idx < state.rounds_total:
             state.round_idx += 1
-            if state.round_idx == 13:
+            if state.round_idx == 11:
                 contract_eval_passed = contract_fulfilled(state, state.scenario_key)
                 game_over_from_contract_eval = True
                 mode = "over"
@@ -386,10 +398,10 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         score_str = f"SCORE:{state.score}"
         stxt = rtxt(font_small, score_str, PAPER)
         screen.blit(stxt, (stat_bar.centerx - stxt.get_width() // 2, stat_bar.y + 2))
-        if state.round_idx >= 13:
+        if state.round_idx >= 11:
             rlabel = "Final Round"
         else:
-            rlabel = f"Round {state.round_idx} of 12"
+            rlabel = f"Round {state.round_idx} of 10"
         rts = rtxt(font_small, rlabel, GOLD)
         screen.blit(rts, (stat_bar.right - rts.get_width() - 6, stat_bar.y + 2))
 
@@ -958,7 +970,7 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             screen.blit(rr, (20, y))
             y += line_step
         y += 12
-        for line in wrap_text("You have 12 rounds. Build your stats with Active cards. Click deck to draw & advance. Max 3 in hand. Meet the objective by round 12 to win.", LOW_W - 28):
+        for line in wrap_text("You have 10 rounds. Build your stats with Active cards. Click deck to draw & advance. Max 3 in hand. Meet the objective by round 10 to win.", LOW_W - 28):
             rr = rtxt(font_tiny, line, (200, 198, 188), bold_px=0)
             screen.blit(rr, (20, y))
             y += line_step
@@ -1005,7 +1017,16 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         tl_cx, tl_cy = 8 + half_w // 2, 8 + half_h // 2
         br_cx, br_cy = 8 + half_w + half_w // 2, 8 + half_h + half_h // 2
         logo_placeholder = rtxt(font_small, "[Logo]", (120, 118, 100), bold_px=0)
-        screen.blit(logo_placeholder, (tl_cx - logo_placeholder.get_width() // 2, tl_cy - logo_placeholder.get_height() // 2))
+        if author1_logo_surf is not None:
+            # "First creator" logo goes in the LEFT placeholder quadrant.
+            # Add a subtle floating/hover animation.
+            bob = int(3 * math.sin(frame * 0.05))
+            screen.blit(
+                author1_logo_surf,
+                (tl_cx - author1_logo_surf.get_width() // 2, tl_cy - author1_logo_surf.get_height() // 2 + bob),
+            )
+        else:
+            screen.blit(logo_placeholder, (tl_cx - logo_placeholder.get_width() // 2, tl_cy - logo_placeholder.get_height() // 2))
         screen.blit(logo_placeholder, (br_cx - logo_placeholder.get_width() // 2, br_cy - logo_placeholder.get_height() // 2))
         # Top-right: author 1 (yellow name, white contributions)
         tr_x, tr_y = 8 + half_w + 12, 8 + 14
@@ -1430,12 +1451,14 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             if deck_draw_step_index >= len(deck_draw_buffer):
                 # Black box model:
                 # - The hidden card is revealed only when the next deck draw completes.
-                # - If we are continuing the hidden cycle, we hide one of the newly-drawn cards instead.
+                # - If we are continuing the hidden cycle, we hide the *first* newly-drawn card.
+                #   (This prevents alternating between different cards within the same round draw.)
                 # - Even if the black box model card was removed from ACTIVE, the previously hidden card
                 #   should stay hidden until this draw completes.
                 should_continue_hidden_cycle = deck_draw_start_had_black_box or hidden_hand_index is not None
                 if should_continue_hidden_cycle and deck_draw_start_hand_len < len(hand):
-                    hidden_hand_index = random.choice(range(deck_draw_start_hand_len, len(hand)))
+                    # Always hide the first card drawn from the deck in this "next round" draw.
+                    hidden_hand_index = deck_draw_start_hand_len
                 else:
                     hidden_hand_index = None
                 deck_draw_in_progress = False

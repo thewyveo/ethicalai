@@ -20,7 +20,7 @@ class Card:
 
 @dataclass
 class State:
-    rounds_total: int = 13
+    rounds_total: int = 11
     round_idx: int = 1
     scenario_key: str | None = None
 
