@@ -34,6 +34,7 @@ PAPER = (240, 236, 228)
 PAPER_DARK = (214, 208, 196)
 RED = (220, 72, 72)
 BLUE = (60, 140, 220)
+WHITE = (255, 255, 255)
 
 
 @dataclass
@@ -117,9 +118,56 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
     msg_box = pygame.Rect(8, 34, LOW_W - 16, 72)
     hover_box = pygame.Rect(8, 110, LOW_W - 16, 46)
 
-    # Card size and row position (used for button, deck, trash, cards).
+    # Card size (small so they fit the window); art is smooth-scaled to this for readability.
+    _pggame_dir = os.path.dirname(os.path.abspath(__file__))
+    _src_dir = os.path.join(_pggame_dir, "..", "src")
     CARD_W, CARD_H = 80, 104
-    card_base_y = LOW_H - CARD_H - 8
+    card_art_surfs: Dict[str, pygame.Surface] = {}
+    _cards_dir = os.path.join(_src_dir, "cards")
+    if os.path.isdir(_cards_dir):
+        for _fn in sorted(os.listdir(_cards_dir)):
+            if not _fn.lower().endswith((".png", ".webp")):
+                continue
+            _path = os.path.join(_cards_dir, _fn)
+            try:
+                _surf = pygame.image.load(_path).convert_alpha()
+                # Smooth scaling preserves readability when downscaling (vs. nearest-neighbor).
+                card_art_surfs[_fn] = pygame.transform.smoothscale(_surf, (CARD_W, CARD_H))
+            except Exception:
+                pass
+
+    # suits.txt: "X,y" with X = 2..24 or A, y = r (red border) or w (white border)
+    suit_border_map: Dict[str, str] = {}
+    _suits_path = os.path.join(_cards_dir, "suits.txt")
+    if os.path.isfile(_suits_path):
+        try:
+            with open(_suits_path, "r", encoding="utf-8") as _f:
+                for _line in _f:
+                    _line = _line.strip()
+                    if not _line or "," not in _line:
+                        continue
+                    _x, _y = _line.split(",", 1)
+                    _x, _y = _x.strip(), _y.strip().lower()
+                    if _y in ("r", "w"):
+                        suit_border_map[_x] = _y
+        except Exception:
+            pass
+
+    def card_border_color(c: Card) -> Tuple[int, int, int]:
+        """Border color from suits.txt: red or white by card art id (A, 2..24); else GOLD."""
+        if not c.art:
+            return GOLD
+        key = c.art.split("-")[0].strip()
+        color_key = suit_border_map.get(key)
+        if color_key == "r":
+            return RED
+        if color_key == "w":
+            return WHITE
+        return GOLD
+
+    # Hand cards: moved up into the middle. Deck/collected stay at bottom corners.
+    card_base_y = LOW_H - CARD_H - 78
+    deck_base_y = LOW_H - CARD_H - 8
 
     constraint_failed: bool = False
 
@@ -143,11 +191,20 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
     deck_draw_step_index: int = 0  # how many cards from buffer are already committed to hand
     DECK_DRAW_STEP_FRAMES = 18  # frames per "add one card" animation step
 
+    # Collect animation: played cards fly to the collection pile (like deck draw arch).
+    collect_anim_list: List[Tuple[Card, pygame.Rect, float]] = []  # (card, start_rect, progress 0..1)
+    collect_anim_frames_per_card = 20
+
     message = "Select up to 3 cards. PLAY commits and scores the round."
     story_line = round_story(state.round_idx)
-    mode: str = "intro"  # intro -> game -> over -> boss
+    mode: str = "menu"  # menu -> credits -> intro -> game -> over -> boss
     hover_idx: int | None = None
     frame: int = 0
+    game_over_retry_rect: Optional[pygame.Rect] = None
+    menu_play_rect: Optional[pygame.Rect] = None
+    menu_credits_rect: Optional[pygame.Rect] = None
+    menu_settings_rect: Optional[pygame.Rect] = None
+    credits_back_rect: Optional[pygame.Rect] = None
 
     def draw_from_deck(n: int) -> None:
         nonlocal deck, hand
@@ -231,6 +288,7 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
     def end_round() -> None:
         nonlocal message, story_line, mode, constraint_failed
         if hard_loss():
+            mode = "over"
             return
         if check_round_constraint():
             constraint_failed = True
@@ -450,14 +508,27 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             if new_count == old_count:
                 rects = card_rects()
                 for i, (c, r) in enumerate(zip(hand, rects)):
-                    outer = GOLD
-                    if c.art and c.art in card_art_surfs:
-                        screen.blit(card_art_surfs[c.art], r)
-                        draw_pixel_frame(screen, r, outer, PAPER_DARK)
+                    outer = card_border_color(c)
+                    if i in selected:
+                        card_surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+                        if c.art and c.art in card_art_surfs:
+                            card_surf.blit(card_art_surfs[c.art], (0, 0))
+                            draw_pixel_frame(card_surf, pygame.Rect(0, 0, r.w, r.h), outer, PAPER_DARK)
+                        else:
+                            draw_pixel_border(card_surf, pygame.Rect(0, 0, r.w, r.h), (250, 248, 240), outer)
+                            pip = rtxt(font_small, c.suit[0].upper(), outer, bold_px=0)
+                            card_surf.blit(pip, (4, 3))
+                        angle = math.sin((frame * 0.22) + i * 1.1) * 2.0
+                        rotated = pygame.transform.rotozoom(card_surf, angle, 1.0)
+                        screen.blit(rotated, rotated.get_rect(center=r.center))
                     else:
-                        body = PAPER if i not in selected else (250, 248, 240)
-                        edge = GOLD
-                        draw_pixel_border(screen, r, body, edge)
+                        if c.art and c.art in card_art_surfs:
+                            screen.blit(card_art_surfs[c.art], r)
+                            draw_pixel_frame(screen, r, outer, PAPER_DARK)
+                        else:
+                            draw_pixel_border(screen, r, PAPER, outer)
+                            pip = rtxt(font_small, c.suit[0].upper(), outer, bold_px=0)
+                            screen.blit(pip, (r.x + 4, r.y + 3))
                 return
 
             # Normalized progress for this step.
@@ -480,17 +551,27 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                 x = int(old_x + (new_x - old_x) * ease)
                 y = card_base_y - (5 if i in selected else 0)
                 r = pygame.Rect(x, y, w, h)
-
-                outer = GOLD
-                if c.art and c.art in card_art_surfs:
-                    screen.blit(card_art_surfs[c.art], r)
-                    draw_pixel_frame(screen, r, outer, PAPER_DARK)
+                outer = card_border_color(c)
+                if i in selected:
+                    card_surf = pygame.Surface((w, h), pygame.SRCALPHA)
+                    if c.art and c.art in card_art_surfs:
+                        card_surf.blit(card_art_surfs[c.art], (0, 0))
+                        draw_pixel_frame(card_surf, pygame.Rect(0, 0, w, h), outer, PAPER_DARK)
+                    else:
+                        draw_pixel_border(card_surf, pygame.Rect(0, 0, w, h), (250, 248, 240), outer)
+                        pip = rtxt(font_small, c.suit[0].upper(), outer, bold_px=0)
+                        card_surf.blit(pip, (4, 3))
+                    angle = math.sin((frame * 0.22) + i * 1.1) * 2.0
+                    rotated = pygame.transform.rotozoom(card_surf, angle, 1.0)
+                    screen.blit(rotated, rotated.get_rect(center=r.center))
                 else:
-                    body = PAPER if i not in selected else (250, 248, 240)
-                    edge = GOLD
-                    draw_pixel_border(screen, r, body, edge)
-                    pip = rtxt(font_small, c.suit[0].upper(), edge, bold_px=0)
-                    screen.blit(pip, (r.x + 4, r.y + 3))
+                    if c.art and c.art in card_art_surfs:
+                        screen.blit(card_art_surfs[c.art], r)
+                        draw_pixel_frame(screen, r, outer, PAPER_DARK)
+                    else:
+                        draw_pixel_border(screen, r, PAPER, outer)
+                        pip = rtxt(font_small, c.suit[0].upper(), outer, bold_px=0)
+                        screen.blit(pip, (r.x + 4, r.y + 3))
 
             # Then draw the new card on an arch path from the deck to its final slot.
             target_x = new_start_x + old_count * (w + gap)
@@ -505,56 +586,64 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
 
             anim_rect = pygame.Rect(0, 0, w, h)
             anim_rect.center = (x_center, y_center)
-
             if deck_back_card_surf is not None:
                 screen.blit(deck_back_card_surf, anim_rect)
             else:
                 draw_pixel_border(screen, anim_rect, PAPER, GOLD)
             return
 
-        # Normal (no animation): draw real hand at its current centered positions.
+        # Normal (no animation): draw real hand; selected cards get a slight shake/wobble.
         rects = card_rects()
         for i, (c, r) in enumerate(zip(hand, rects)):
-            outer = GOLD
+            outer = card_border_color(c)
             inner = PAPER_DARK
-
-            if c.art and c.art in card_art_surfs:
-                if i in selected:
-                    card_surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+            if i in selected:
+                card_surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+                if c.art and c.art in card_art_surfs:
                     card_surf.blit(card_art_surfs[c.art], (0, 0))
                     draw_pixel_frame(card_surf, pygame.Rect(0, 0, r.w, r.h), outer, inner)
-                    angle = math.sin((frame * 0.22) + i * 1.1) * 2.0  # degrees, gentle roll
-                    rotated = pygame.transform.rotozoom(card_surf, angle, 1.0)
-                    dest = rotated.get_rect(center=r.center)
-                    screen.blit(rotated, dest)
                 else:
+                    draw_pixel_border(card_surf, pygame.Rect(0, 0, r.w, r.h), (250, 248, 240), outer)
+                    pip = rtxt(font_small, c.suit[0].upper(), outer, bold_px=0)
+                    card_surf.blit(pip, (4, 3))
+                angle = math.sin((frame * 0.22) + i * 1.1) * 2.0
+                rotated = pygame.transform.rotozoom(card_surf, angle, 1.0)
+                screen.blit(rotated, rotated.get_rect(center=r.center))
+            else:
+                if c.art and c.art in card_art_surfs:
                     screen.blit(card_art_surfs[c.art], r)
                     draw_pixel_frame(screen, r, outer, inner)
-            else:
-                # Fallback when no artwork is assigned.
-                body = PAPER if i not in selected else (250, 248, 240)
-                edge = GOLD
-                pip = rtxt(font_small, c.suit[0].upper(), edge, bold_px=0)
-                if i in selected:
-                    card_surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
-                    draw_pixel_border(card_surf, pygame.Rect(0, 0, r.w, r.h), body, edge)
-                    card_surf.blit(pip, (4, 3))
-                    angle = math.sin((frame * 0.22) + i * 1.1) * 2.0
-                    rotated = pygame.transform.rotozoom(card_surf, angle, 1.0)
-                    dest = rotated.get_rect(center=r.center)
-                    screen.blit(rotated, dest)
                 else:
-                    draw_pixel_border(screen, r, body, edge)
+                    draw_pixel_border(screen, r, PAPER, outer)
+                    pip = rtxt(font_small, c.suit[0].upper(), outer, bold_px=0)
                     screen.blit(pip, (r.x + 4, r.y + 3))
 
-    deck_rect = pygame.Rect(10, card_base_y, CARD_W, CARD_H)
-    collected_rect = pygame.Rect(LOW_W - 10 - CARD_W, card_base_y, CARD_W, CARD_H)
+        # Collect animation: cards flying to collection pile (arch like deck draw).
+        for card, start_r, progress in collect_anim_list:
+            norm = min(1.0, progress)
+            ease = norm * norm * (3.0 - 2.0 * norm)
+            arch_h = int(CARD_H * 0.55)
+            sx, sy = start_r.centerx, start_r.centery
+            tx, ty = collected_rect.centerx, collected_rect.centery
+            xc = int(sx + (tx - sx) * ease)
+            yc = int(sy + (ty - sy) * ease - arch_h * math.sin(math.pi * norm))
+            anim_r = pygame.Rect(0, 0, CARD_W, CARD_H)
+            anim_r.center = (xc, yc)
+            outer = card_border_color(card)
+            if card.art and card.art in card_art_surfs:
+                screen.blit(card_art_surfs[card.art], anim_r)
+                draw_pixel_frame(screen, anim_r, outer, PAPER_DARK)
+            else:
+                draw_pixel_border(screen, anim_r, PAPER, outer)
+                pip = rtxt(font_small, card.suit[0].upper(), outer, bold_px=0)
+                screen.blit(pip, (anim_r.x + 4, anim_r.y + 3))
+
+    deck_rect = pygame.Rect(10, deck_base_y, CARD_W, CARD_H)
+    collected_rect = pygame.Rect(LOW_W - 10 - CARD_W, deck_base_y, CARD_W, CARD_H)
     deck_anim_frames = 0
     trash_flash_frames = 0
 
     # Deck back image (card back graphic)
-    _pggame_dir = os.path.dirname(os.path.abspath(__file__))
-    _src_dir = os.path.join(_pggame_dir, "..", "src")
     _deck_back_paths = [
         os.path.join(_src_dir, "back_of_card.webp"),
         os.path.join(_src_dir, "back_of_card.png"),
@@ -572,21 +661,6 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
     deck_back_card_surf: Optional[pygame.Surface] = None
     if deck_back_surf is not None:
         deck_back_card_surf = pygame.transform.smoothscale(deck_back_surf, (CARD_W, CARD_H))
-
-    # Card artwork cache (optional artwork provided by files in `src/cards/`).
-    card_art_surfs: Dict[str, pygame.Surface] = {}
-    _cards_dir = os.path.join(_src_dir, "cards")
-    if os.path.isdir(_cards_dir):
-        for _fn in os.listdir(_cards_dir):
-            if not _fn.lower().endswith((".png", ".webp")):
-                continue
-            _path = os.path.join(_cards_dir, _fn)
-            try:
-                _surf = pygame.image.load(_path).convert_alpha()
-                # Use non-smooth scaling to keep pixel-art-ish edges.
-                card_art_surfs[_fn] = pygame.transform.scale(_surf, (CARD_W, CARD_H))
-            except Exception:
-                pass
 
     _play_paths = [
         os.path.join(_src_dir, "play.png"),
@@ -668,26 +742,54 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
 
         # Deck, trash, and draw animation only during normal play (not game over).
         if mode == "game":
-            # Deck pile: use card back image if loaded, else placeholder
-            if deck_back_card_surf is not None:
-                screen.blit(deck_back_card_surf, deck_rect)
-            else:
-                draw_pixel_border(screen, deck_rect, PAPER_DARK, GOLD)
+            # Deck label above the deck
+            deck_label = rtxt(font_tiny, "DECK", GOLD, bold_px=1)
+            dlx = deck_rect.centerx - deck_label.get_width() // 2
+            dly = deck_rect.y - deck_label.get_height() - 4
+            screen.blit(deck_label, (dlx, dly))
 
-            # Draw hint above deck (small, yellow, pulsing).
+            # Deck pile: stacked card backs (3 layers) for a deck look
+            for offset in (4, 2, 0):
+                r = pygame.Rect(deck_rect.x + offset, deck_rect.y + offset, CARD_W, CARD_H)
+                if deck_back_card_surf is not None:
+                    screen.blit(deck_back_card_surf, r)
+                else:
+                    draw_pixel_border(screen, r, PAPER_DARK, GOLD)
+
+            # When "click to draw" hint is visible: flashing dark mask over deck (inset a few px on each side)
             if pending_draw and pending_draw_frames >= PENDING_DRAW_HINT_FRAMES:
-                hint_text = "Click to draw"
-                hint = rtxt(font_tiny, hint_text, GOLD, bold_px=1)
                 t = pending_draw_frames - PENDING_DRAW_HINT_FRAMES
-                period = 90  # ~1.5s at 60fps
-                pulse = 0.5 + 0.5 * math.sin(2.0 * math.pi * (t / period))
-                alpha = int(210 + 45 * pulse)
-                hint.set_alpha(alpha)
-                hx = deck_rect.centerx - hint.get_width() // 2
-                hy = deck_rect.y - hint.get_height() - 2
-                screen.blit(hint, (hx, hy))
+                hint_period = 60
+                pulse = 0.5 + 0.5 * math.sin(2.0 * math.pi * (t / hint_period))
+                mask_alpha = int(80 * pulse)
+                mask_inset = 4
+                deck_mask = pygame.Surface((CARD_W - mask_inset * 2, CARD_H - mask_inset * 2), pygame.SRCALPHA)
+                deck_mask.fill((0, 0, 0, mask_alpha))
+                screen.blit(deck_mask, (deck_rect.x + mask_inset, deck_rect.y + mask_inset))
 
-            # Collected pile area (right side, where trash used to be)
+            # Draw hint: text + left-pointing arrow; flash synced with mask; text dims more (but less than mask)
+            if pending_draw and pending_draw_frames >= PENDING_DRAW_HINT_FRAMES:
+                t = pending_draw_frames - PENDING_DRAW_HINT_FRAMES
+                hint_period = 60
+                pulse = 0.5 + 0.5 * math.sin(2.0 * math.pi * (t / hint_period))
+                # Text alpha: more "black" (lower min) than before, still not as strong as mask
+                text_alpha = int(140 + 115 * pulse)
+                hint_text = "Draw"
+                hint = rtxt(font_tiny, hint_text, GOLD, bold_px=1)
+                hint.set_alpha(text_alpha)
+                hx = deck_rect.right + 6
+                hy = deck_rect.centery - hint.get_height() // 2
+                screen.blit(hint, (hx, hy))
+                # Left-pointing arrow (tip on left)
+                arrow_w, arrow_h = 16, 12
+                ax = hx - arrow_w - 4
+                ay = hy + hint.get_height() // 2 - arrow_h // 2
+                arrow_surf = pygame.Surface((arrow_w + 2, arrow_h + 2), pygame.SRCALPHA)
+                pts = [(1, arrow_h // 2 + 1), (arrow_w + 1, 1), (arrow_w + 1, arrow_h + 1)]
+                pygame.draw.polygon(arrow_surf, (*GOLD, text_alpha), pts)
+                screen.blit(arrow_surf, (ax - 1, ay - 1))
+
+            # Collected pile area (right side); max 3 cards visible stacked
             label = rtxt(font_tiny, "COLLECTED", GOLD, bold_px=1)
             lx = collected_rect.centerx - label.get_width() // 2
             ly = collected_rect.y - label.get_height() - 6
@@ -700,19 +802,18 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             if not collected:
                 draw_pixel_border(screen, collected_rect, FELT_DARK, GOLD)
             else:
-                max_show = 5
+                max_show = 3
                 show = collected[-max_show:]
                 for j, card in enumerate(show):
                     dx = -2 * (len(show) - 1 - j)
                     dy = -2 * (len(show) - 1 - j)
                     r = pygame.Rect(collected_rect.x + dx, collected_rect.y + dy, CARD_W, CARD_H)
-                    outer = GOLD
+                    outer = card_border_color(card)
                     if card.art and card.art in card_art_surfs:
                         screen.blit(card_art_surfs[card.art], r)
                         draw_pixel_frame(screen, r, outer, PAPER_DARK)
                     else:
-                        edge = GOLD
-                        draw_pixel_border(screen, r, PAPER_DARK, edge)
+                        draw_pixel_border(screen, r, PAPER_DARK, outer)
 
     def draw_intro() -> None:
         draw_tiled_background()
@@ -751,8 +852,70 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         tip = rtxt(font_small, "Click anywhere to begin. ESC quits.", GOLD)
         screen.blit(tip, (14, LOW_H - 20))
 
+    def draw_menu() -> None:
+        nonlocal menu_play_rect, menu_credits_rect, menu_settings_rect
+        draw_tiled_background()
+        draw_pixel_border(screen, pygame.Rect(8, 8, LOW_W - 16, LOW_H - 16), FELT_DARK, GOLD)
+        # Title (placeholder; user will upload image later)
+        title = rtxt(font_big, "ETHICAL STACK", GOLD)
+        tx = (LOW_W - title.get_width()) // 2
+        screen.blit(title, (tx, 52))
+        # Buttons: Play, Credits, Settings
+        btn_h = 36
+        btn_w = 200
+        cx = LOW_W // 2
+        play_y = 130
+        menu_play_rect = pygame.Rect(cx - btn_w // 2, play_y, btn_w, btn_h)
+        draw_pixel_border(screen, menu_play_rect, GOLD, (80, 70, 40))
+        ptxt = rtxt(font_small, "Play", INK)
+        screen.blit(ptxt, (menu_play_rect.centerx - ptxt.get_width() // 2, menu_play_rect.centery - ptxt.get_height() // 2))
+        cred_y = play_y + btn_h + 12
+        menu_credits_rect = pygame.Rect(cx - btn_w // 2, cred_y, btn_w, btn_h)
+        draw_pixel_border(screen, menu_credits_rect, FELT_DARK, GOLD)
+        ctxt = rtxt(font_small, "Credits", PAPER)
+        screen.blit(ctxt, (menu_credits_rect.centerx - ctxt.get_width() // 2, menu_credits_rect.centery - ctxt.get_height() // 2))
+        set_y = cred_y + btn_h + 12
+        menu_settings_rect = pygame.Rect(cx - btn_w // 2, set_y, btn_w, btn_h)
+        draw_pixel_border(screen, menu_settings_rect, FELT_DARK, GOLD)
+        stxt = rtxt(font_small, "Settings", PAPER)
+        screen.blit(stxt, (menu_settings_rect.centerx - stxt.get_width() // 2, menu_settings_rect.centery - stxt.get_height() // 2))
+        esc = rtxt(font_small, "ESC to quit", (160, 158, 148), bold_px=0)
+        screen.blit(esc, (LOW_W - esc.get_width() - 12, LOW_H - 20))
+
+    def draw_credits() -> None:
+        """Credits: background and text/logos only, no borders or boxes."""
+        nonlocal credits_back_rect
+        draw_tiled_background()
+        half_w = (LOW_W - 16) // 2
+        half_h = (LOW_H - 16) // 2
+        # Top-left & bottom-right: logo placeholders (centers of quadrants)
+        tl_cx, tl_cy = 8 + half_w // 2, 8 + half_h // 2
+        br_cx, br_cy = 8 + half_w + half_w // 2, 8 + half_h + half_h // 2
+        logo_placeholder = rtxt(font_small, "[Logo]", (120, 118, 100), bold_px=0)
+        screen.blit(logo_placeholder, (tl_cx - logo_placeholder.get_width() // 2, tl_cy - logo_placeholder.get_height() // 2))
+        screen.blit(logo_placeholder, (br_cx - logo_placeholder.get_width() // 2, br_cy - logo_placeholder.get_height() // 2))
+        # Top-right: author 1 (yellow name, white contributions)
+        tr_x, tr_y = 8 + half_w + 12, 8 + 14
+        author1_name = rtxt(font_small, "Author One", GOLD)
+        screen.blit(author1_name, (tr_x, tr_y))
+        contrib1 = rtxt(font_tiny, "Placeholder contributions for author one.", PAPER, bold_px=0)
+        screen.blit(contrib1, (tr_x, tr_y + 20))
+        # Bottom-left: author 2
+        bl_x, bl_y = 8 + 12, 8 + half_h + 14
+        author2_name = rtxt(font_small, "Author Two", GOLD)
+        screen.blit(author2_name, (bl_x, bl_y))
+        contrib2 = rtxt(font_tiny, "Placeholder contributions for author two.", PAPER, bold_px=0)
+        screen.blit(contrib2, (bl_x, bl_y + 20))
+        # Back (text only, no box; rect for click)
+        credits_back_rect = pygame.Rect(LOW_W // 2 - 60, LOW_H - 44, 120, 28)
+        back_txt = rtxt(font_small, "Back", GOLD)
+        screen.blit(back_txt, (credits_back_rect.centerx - back_txt.get_width() // 2, credits_back_rect.centery - back_txt.get_height() // 2))
+
     def draw_game_over() -> None:
-        draw_bg()
+        nonlocal game_over_retry_rect
+        draw_tiled_background()
+        draw_pixel_border_alpha(screen, pygame.Rect(40, 60, LOW_W - 80, 180), FELT_DARK, GOLD, fill_alpha=235)
+        failed = constraint_failed or hard_loss()
         if constraint_failed:
             msg = "RUN FAILED"
             sub = message
@@ -762,15 +925,23 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         else:
             msg = "RUN COMPLETE"
             sub = "Your choices outlive your dashboard."
-        big = font_big.render(msg, True, RED if (constraint_failed or hard_loss()) else GOLD)
-        screen.blit(big, (10, 90))
-        yy = 112
-        for line in wrap_text(sub, LOW_W - 20):
-            small = font_small.render(line, True, PAPER)
-            screen.blit(small, (10, yy))
-            yy += 10
-        esc = font_small.render("Press ESC to quit.", True, GOLD)
-        screen.blit(esc, (10, LOW_H - 24))
+        title_color = RED if failed else GOLD
+        big = rtxt(font_big, msg, title_color)
+        screen.blit(big, ((LOW_W - big.get_width()) // 2, 80))
+        yy = 118
+        line_step = font_small.get_linesize() + 5
+        for line in wrap_text(sub, LOW_W - 100):
+            small = rtxt(font_small, line, PAPER, bold_px=0)
+            screen.blit(small, ((LOW_W - small.get_width()) // 2, yy))
+            yy += line_step
+        yy += 16
+        retry_w, retry_h = 140, 36
+        game_over_retry_rect = pygame.Rect((LOW_W - retry_w) // 2, yy, retry_w, retry_h)
+        draw_pixel_border(screen, game_over_retry_rect, GOLD, (80, 70, 40))
+        rtxt_surf = rtxt(font_small, "Retry", INK)
+        screen.blit(rtxt_surf, (game_over_retry_rect.centerx - rtxt_surf.get_width() // 2, game_over_retry_rect.centery - rtxt_surf.get_height() // 2))
+        esc = rtxt(font_small, "ESC to quit", GOLD, bold_px=0)
+        screen.blit(esc, ((LOW_W - esc.get_width()) // 2, LOW_H - 24))
 
     def draw_boss() -> None:
         nonlocal boss_option_rects
@@ -835,7 +1006,9 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
         esc = font_small.render("Press ESC to quit.", True, GOLD)
         screen.blit(esc, ((LOW_W - esc.get_width()) // 2, LOW_H - 28))
 
-    start_round()
+    # Start in menu; start_round() is called when leaving menu (Play -> intro)
+    if mode != "menu":
+        start_round()
 
     clock = pygame.time.Clock()
     running = True
@@ -863,6 +1036,7 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
             and (not played_this_round)
             and (not pending_draw)
             and (not deck_draw_in_progress)
+            and (len(collect_anim_list) == 0)
         )
 
         for event in pygame.event.get():
@@ -872,9 +1046,35 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                 running = False
 
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if mode == "menu":
+                    if menu_play_rect and menu_play_rect.collidepoint(mouse_low):
+                        mode = "intro"
+                        start_round()
+                        message = "Select up to 3 cards. PLAY commits and scores the round."
+                        story_line = round_story(state.round_idx)
+                    elif menu_credits_rect and menu_credits_rect.collidepoint(mouse_low):
+                        mode = "credits"
+                    # Settings: placeholder, no-op
+                    continue
+                if mode == "credits" and credits_back_rect and credits_back_rect.collidepoint(mouse_low):
+                    mode = "menu"
+                    continue
                 if mode == "intro":
                     mode = "game"
                     message = "Play up to 3 cards. LOCK IN once ready."
+                    continue
+                if mode == "over" and game_over_retry_rect and game_over_retry_rect.collidepoint(mouse_low):
+                    state = State()
+                    deck, discard, collected, hand = [], [], [], []
+                    selected = []
+                    played_this_round = False
+                    played_effects_this_round.clear()
+                    constraint_failed = False
+                    message = "Play up to 3 cards. LOCK IN once ready."
+                    story_line = round_story(state.round_idx)
+                    mode = "game"
+                    collect_anim_list.clear()
+                    start_round()
                     continue
                 if mode == "boss":
                     questions = get_final_stage_questions()
@@ -935,11 +1135,13 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                     # Play order is left->right, so the rightmost selected becomes "last played".
                     sel_lr = sorted(selected)
                     cards_to_play = [hand[i] for i in sel_lr]
+                    rects = card_rects()
                     for card in cards_to_play:
                         state.apply(card.effects)
                         discard.append(card)
-                        collected.append(card)
-                    # Remove from hand safely (highest index first).
+                    for idx, card in zip(sel_lr, cards_to_play):
+                        start_r = rects[idx].copy()
+                        collect_anim_list.append((card, start_r, 0.0))
                     for idx in sorted(selected, reverse=True):
                         hand.pop(idx)
                     selected = []
@@ -957,7 +1159,11 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                         hover_idx = i
                         break
 
-        if mode == "intro":
+        if mode == "menu":
+            draw_menu()
+        elif mode == "credits":
+            draw_credits()
+        elif mode == "intro":
             draw_intro()
         elif mode == "boss":
             draw_boss()
@@ -977,6 +1183,16 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
 
         pygame.transform.scale(screen, (W, H), window)
         pygame.display.flip()
+
+        # Advance collect animation: add to collected when progress >= 1
+        for i in range(len(collect_anim_list) - 1, -1, -1):
+            card, start_r, progress = collect_anim_list[i]
+            progress += 1.0 / collect_anim_frames_per_card
+            if progress >= 1.0:
+                collected.append(card)
+                collect_anim_list.pop(i)
+            else:
+                collect_anim_list[i] = (card, start_r, progress)
 
         if deck_draw_in_progress and deck_anim_frames > 0:
             deck_anim_frames -= 1
