@@ -84,7 +84,7 @@ def get_scenario_objective_lines(contract_key: Optional[str]) -> Tuple[str, str,
         "defense": "Operational readiness: prioritize automation & stability.",
     }.get(contract_key, "Tune your active deck to the contract thresholds.")
 
-    short = {"transparency": "Tra", "stability": "Sta", "automation": "Aut", "generalizability": "Gen", "integrity": "Int"}
+    short = {"transparency": "Trnsprcy.", "stability": "Stblty.", "automation": "Automtn.", "generalizability": "Genrlzblty.", "integrity": "Intgrty."}
     parts = [f"{short.get(s, s)} > {val}" for s, val in req.items()]
     line3 = ", ".join(parts)
     return line1, setting, line3
@@ -170,28 +170,28 @@ def _card_definitions() -> Dict[str, Dict[str, Any]]:
         "human_in_the_loop": {"name": "Human in the Loop", "text": "Lowest stat when placed in active gets +5. Recomputed if moved and re-added.", "effects": {}, "passive": {"type": "lowest_stat_boost", "amount": 5}},
         "bias_fairness": {"name": "Bias Fairness", "text": "The system is evaluated for fairness across groups.", "effects": {"integrity": 2}, "passive": None},
         "shadow_deployment": {"name": "Shadow Deployment", "text": "After each round, a random stat gets +1 or -1.", "effects": {}, "passive": {"type": "random_stat_per_round"}},
-        "procurement_cut": {"name": "Procurement Cut", "text": "...", "effects": {"automation": 1, "stability": -1, "integrity": -1}, "passive": None},
-        "data_privacy": {"name": "Data Privacy", "text": "...", "effects": {"generalizability": -1, "integrity": 1}, "passive": None},
-        "safety_risk_control": {"name": "Safety Risk Control", "text": "...", "effects": {"stability": 2}, "passive": None},
-        "alignment": {"name": "Alignment", "text": "...", "effects": {"integrity": 1, "generalizability": 1}, "passive": None},
-        "model_drift": {"name": "Model Drift", "text": "...", "effects": {"integrity": -1, "generalizability": -1, "stability": -1}, "passive": None},
-        "regularization": {"name": "Regularization", "text": "...", "effects": {}, "passive": {"type": "cap_negatives"}},
-        "robustness_testing": {"name": "Robustness Testing", "text": "...", "effects": {"generalizability": 1, "stability": 1}, "passive": None},
-        "local_explainability": {"name": "Local Explainability", "text": "...", "effects": {"transparency": 1, "integrity": 1}, "passive": None},
-        "carbon_footprint": {"name": "Carbon Footprint", "text": "...", "effects": {"integrity": -3}, "passive": {"type": "extra_slot"}},
-        "overfitting": {"name": "Overfitting", "text": "...", "effects": {"generalizability": -2, "integrity": -1}, "passive": None},
-        "neural_network": {"name": "Neural Network", "text": "...", "effects": {"transparency": -3, "automation": 2, "generalizability": 1}, "passive": None},
-        "linear_regression": {"name": "Linear Regression", "text": "...", "effects": {"transparency": 1, "automation": 1, "generalizability": -3}, "passive": None},
+        "procurement_cut": {"name": "Procurement Cut", "text": "Shady vendor: no questions asked.", "effects": {"automation": 1, "stability": -1, "integrity": -1}, "passive": None},
+        "data_privacy": {"name": "Data Privacy", "text": "Limits scope but increases trust.", "effects": {"generalizability": -1, "integrity": 1}, "passive": None},
+        "safety_risk_control": {"name": "Safety Risk Control", "text": "Safety first!", "effects": {"stability": 2}, "passive": None},
+        "alignment": {"name": "Alignment", "text": "System is aligned with company goals.", "effects": {"integrity": 1, "generalizability": 1}, "passive": None},
+        "model_drift": {"name": "Model Drift", "text": "Whoops! Your model degraded.", "effects": {"integrity": -1, "generalizability": -1, "stability": -1}, "passive": None},
+        "regularization": {"name": "Regularization", "text": "All negative stat debuffs are capped to -1.", "effects": {}, "passive": {"type": "cap_negatives"}},
+        "robustness_testing": {"name": "Robustness Testing", "text": "Varied conditions don't scare you.", "effects": {"generalizability": 1, "stability": 1}, "passive": None},
+        "local_explainability": {"name": "Local Explainability", "text": "Pinpoint interpretability.", "effects": {"transparency": 1, "integrity": 1}, "passive": None},
+        "carbon_footprint": {"name": "Carbon Footprint", "text": "Resource overuse: adds an extra active slot.", "effects": {"integrity": -3}, "passive": {"type": "extra_slot"}},
+        "overfitting": {"name": "Overfitting", "text": "Your model memorized the data instead of learning.", "effects": {"generalizability": -2, "integrity": -1}, "passive": None},
+        "neural_network": {"name": "Neural Network", "text": "Good model, but not interpretable.", "effects": {"transparency": -3, "automation": 2, "generalizability": 1}, "passive": None},
+        "linear_regression": {"name": "Linear Regression", "text": "Okay model, but not generalizable.", "effects": {"transparency": 1, "automation": 1, "generalizability": -3}, "passive": None},
         "real_time_api": {"name": "Real Time API", "text": "+1 automation each round. Can't be used with Batch Processing.", "effects": {"stability": -1, "integrity": -1}, "passive": {"type": "per_round_stat", "stat": "automation", "amount": 1}},
         "batch_processing": {"name": "Batch Processing", "text": "+1 stability each round. Can't be used with Real Time API.", "effects": {"stability": 1, "automation": -1}, "passive": {"type": "per_round_stat", "stat": "stability", "amount": 1}},
         "feature_engineering": {"name": "Feature Engineering", "text": "One random card's stats are doubled.", "effects": {}, "passive": {"type": "chance_double_effects"}},
-        "ab_testing": {"name": "AB Testing", "text": "...", "effects": {"stability": 2, "integrity": 1}, "passive": None},
-        "reward_hacking": {"name": "Reward Hacking", "text": "...", "effects": {"automation": 1, "integrity": -1}, "passive": None},
-        "hallucination": {"name": "Hallucination", "text": "...", "effects": {"generalizability": -1, "integrity": -1}, "passive": None},
+        "ab_testing": {"name": "AB Testing", "text": "You conduct experiments to validate your model.", "effects": {"stability": 2, "integrity": 1}, "passive": None},
+        "reward_hacking": {"name": "Reward Hacking", "text": "The model optimizes for the wrong objective.", "effects": {"automation": 1, "integrity": -1}, "passive": None},
+        "hallucination": {"name": "Hallucination", "text": "Whooosh!", "effects": {"generalizability": -1, "integrity": -1}, "passive": None},
         "fine_tuning": {"name": "Fine-Tuning", "text": "Lowest stat is floored, cannot go further down.", "effects": {}, "passive": {"type": "lowest_stat_floor"}},
-        "ontology_integration": {"name": "Ontology Integration", "text": "...", "effects": {"integrity": 1, "stability": 1}, "passive": None},
-        "cross_validation": {"name": "Cross-Validation", "text": "...", "effects": {"integrity": 1}, "passive": None},
-        "catastrophic_forgetting": {"name": "Catastrophic Forgetting", "text": "...", "effects": {"generalizability": -3}, "passive": None},
+        "ontology_integration": {"name": "Ontology Integration", "text": "Structured knowledge: improves reliability.", "effects": {"integrity": 1, "stability": 1}, "passive": None},
+        "cross_validation": {"name": "Cross-Validation", "text": "Standard protocol for model validation.", "effects": {"integrity": 1}, "passive": None},
+        "catastrophic_forgetting": {"name": "Catastrophic Forgetting", "text": "Wait... what was I doing again?", "effects": {"generalizability": -3}, "passive": None},
     }
 
 

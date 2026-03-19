@@ -555,9 +555,10 @@ def _run(seed: int | None = None, headless: bool = False) -> None:
                 cx += surf.get_width()
             y += line_step
 
-        # Line 3: passive ability description only if card has passive
-        if getattr(c, "passive", None):
-            for line in wrap_text(c.text.strip(), max_w):
+        # Line 3: card text (setting/gameplay hint). Show for every card, not only passives.
+        c_text = (getattr(c, "text", "") or "").strip()
+        if c_text:
+            for line in wrap_text(c_text, max_w):
                 bl = rtxt(font_tiny, line, neutral_c, bold_px=0)
                 bl.set_colorkey((0, 0, 0))
                 screen.blit(bl, (x, y))
