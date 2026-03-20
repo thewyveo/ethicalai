@@ -87,7 +87,7 @@ def get_scenario_objective_lines(contract_key: Optional[str]) -> Tuple[str, str,
     short = {"transparency": "Trnsprcy.", "stability": "Stblty.", "automation": "Automtn.", "generalizability": "Genrlzblty.", "integrity": "Intgrty."}
     parts = [f"{val} {short.get(s, s)}" for s, val in req.items()]
     line3_j = ", ".join(parts)
-    line3 = "Requirements: " + line3_j
+    line3 = "REQ: " + line3_j
     return line1, setting, line3
 
 

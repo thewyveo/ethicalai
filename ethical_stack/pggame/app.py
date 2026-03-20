@@ -25,6 +25,7 @@ from ethical_stack.pggame.content import (
     get_round_constraint,
     get_scenario_objective_lines,
     get_scenario_objective_text,
+    STAT_ORDER,
     load_cards_from_file,
     on_card_added_to_active,
     on_card_removed_from_active,
@@ -541,6 +542,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
     hover_active_idx: Optional[int] = None
     frame: int = 0
     intro_start_ms: Optional[int] = None
+    intro_page: int = 0  # 0 = GOAL intro, 1 = deployment scenario intro
     game_over_retry_rect: Optional[pygame.Rect] = None
     game_over_menu_rect: Optional[pygame.Rect] = None
     game_over_primary_is_menu: bool = False
@@ -1227,11 +1229,24 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         x, y = 12, msg_text_y
         line_step = font_tiny.get_linesize() + 2
 
+        # Polished UI panel behind the objective/requirements/message text (Phase 1).
+        # Use the same "box/container" style principle as `hover_box`.
+        # Keep it above the hover panel and away from the active deck (even with 6 cards).
+        panel_x = 8  # anchored left as before
+        panel_y = msg_text_y - 4
+        # Extend only to the right; cap it so it won't overlap the ACTIVE deck
+        # even when there are 6 cards.
+        desired_panel_w = hover_box.w + 45  # +20px more than before
+        slot_rects_for_cap = active_slot_rects()
+        max_right = slot_rects_for_cap[0].left - 4 if slot_rects_for_cap else (panel_x + desired_panel_w)
+        panel_w = max(1, min(desired_panel_w, max_right - panel_x))
+        panel_bottom = hover_box.y - 4
+        panel_h = max(1, panel_bottom - panel_y)
+        panel = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
+        draw_pixel_border_alpha(screen, panel, FELT_DARK, GOLD, fill_alpha=235)
+
         def draw_line(text: str, color: Tuple[int, int, int], y0: int) -> None:
             t = rtxt(font_tiny, text, color, bold_px=0)
-            shadow_t = rtxt(font_tiny, text, INK, bold_px=0)
-            shadow_t.set_alpha(160)
-            screen.blit(shadow_t, (x + 1, y0 + 1))
             screen.blit(t, (x, y0))
 
         if story_line:
@@ -1786,25 +1801,70 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         # Objective block: scenario-specific *setting/explanation* (content.py line 2),
         # with "Objective:" removed (we only show the scenario name above).
         _line1, setting_line, _line3 = get_scenario_objective_lines(state.scenario_key)
-        objective_text = setting_line
+        if intro_page == 1:
+            # Page 2: deployment scenario only (centered, shifted down), no tutorial animations.
+            page2_yoff = 70
+            title = rtxt(font_big, "DEPLOYMENT SCENARIO", GOLD)
+            screen.blit(title, ((LOW_W - title.get_width()) // 2, 24 + page2_yoff))
+            sub = rtxt(font_small, scenario_name, PAPER)
+            screen.blit(sub, ((LOW_W - sub.get_width()) // 2, 52 + page2_yoff))
 
-        title = rtxt(font_big, "DEPLOYMENT SCENARIO", GOLD)
+            objective_y = 76 + 15 + page2_yoff
+            objective_step = font_small.get_linesize() + 4
+            # Scenario text first (white), then requirements.
+            for line in wrap_text(setting_line, LOW_W - 28):
+                rr = rtxt(font_small, line, PAPER, bold_px=0)
+                screen.blit(rr, ((LOW_W - rr.get_width()) // 2, objective_y))
+                objective_y += objective_step
+
+            # Margin then Requirements label (red).
+            objective_y += 15
+            req_label = rtxt(font_small, "Requirements", RED, bold_px=1)
+            screen.blit(req_label, ((LOW_W - req_label.get_width()) // 2, objective_y))
+            objective_y += objective_step
+
+            # Full requirements list (no abbreviations), in stable stat order.
+            # Render each line as a plain stat requirement (no dashes/bullets).
+            req_gray = (210, 208, 198)
+            stat_label = {
+                "transparency": "Transparency",
+                "stability": "Stability",
+                "automation": "Automation",
+                "generalizability": "Generalizability",
+                "integrity": "Integrity",
+            }
+            req_map = get_contract_requirements(state.scenario_key) or {}
+            for st in STAT_ORDER:
+                if st not in req_map:
+                    continue
+                line_txt = f"{req_map[st]} {stat_label.get(st, st)}"
+                rr = rtxt(font_small, line_txt, req_gray, bold_px=0)
+                screen.blit(rr, ((LOW_W - rr.get_width()) // 2, objective_y))
+                objective_y += objective_step
+
+            # Bottom-right prompt (page 2).
+            start_tip = rtxt(font_small, "Click to start. ESC to quit.", GOLD)
+            screen.blit(start_tip, (LOW_W - start_tip.get_width() - 14, LOW_H - 30))
+            return
+
+        # Page 1: GOAL intro.
+        title = rtxt(font_big, "GOAL", GOLD)
         screen.blit(title, ((LOW_W - title.get_width()) // 2, 24))
-        sub = rtxt(font_small, scenario_name, PAPER)
+        sub = rtxt(font_small, "You are the CEO of an AI company.", PAPER)
         screen.blit(sub, ((LOW_W - sub.get_width()) // 2, 52))
 
-        # Objective text centered under the scenario name.
-        # Requirements/description block starts slightly below the scenario title.
-        objective_y = 76 + 15
+        objective_text = "Choose the best policies and build a suitable deck for the given scenario."
+        objective_y = 76
         objective_step = font_small.get_linesize() + 4
-        # Requirements label (red), inserted between scenario name and description.
-        req_label = rtxt(font_small, "Requirements:", RED, bold_px=1)
-        screen.blit(req_label, ((LOW_W - req_label.get_width()) // 2, objective_y))
-        objective_y += objective_step
         for line in wrap_text(objective_text, LOW_W - 28):
             rr = rtxt(font_small, line, (210, 208, 198), bold_px=0)
             screen.blit(rr, ((LOW_W - rr.get_width()) // 2, objective_y))
             objective_y += objective_step
+
+        # Red line under the GOAL text.
+        meet_req = rtxt(font_small, "Meet the requirements of your clients.", RED, bold_px=0)
+        screen.blit(meet_req, ((LOW_W - meet_req.get_width()) // 2, objective_y))
+        objective_y += objective_step
 
         # Gap between the scenario subtitle block and the "HOW TO PLAY" title.
         objective_y += 50
@@ -2462,7 +2522,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                         _blit_alpha(cursor_draw, rc.x, rc.y, cursor_alpha)
 
         # Bottom-right prompt: always visible on intro screen.
-        start_tip = rtxt(font_small, "Click to start. ESC to quit.", GOLD)
+        start_tip = rtxt(font_small, "Click to continue. ESC to quit.", GOLD)
         screen.blit(start_tip, (LOW_W - start_tip.get_width() - 14, LOW_H - 30))
 
     def draw_menu() -> None:
@@ -2837,6 +2897,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                             state.scenario_key = rng.choice([c["key"] for c in contracts])
                         mode = "intro"
                         intro_start_ms = pygame.time.get_ticks()
+                        intro_page = 0
                     elif menu_credits_rect and menu_credits_rect.collidepoint(mouse_low):
                         play_sfx("button")
                         mode = "credits"
@@ -2861,6 +2922,12 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                     mode = "menu"
                     continue
                 if mode == "intro":
+                    if intro_page == 0:
+                        # Skip GOAL page -> show deployment scenario page.
+                        intro_page = 1
+                        intro_start_ms = pygame.time.get_ticks()
+                        continue
+                    # Deployment scenario page: start the actual game.
                     start_round()
                     recompute_stats_from_active(state)
                     message = "Click deck to draw & advance. Max 5 in hand. Active cards = your stats."
@@ -2968,6 +3035,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                     if contracts:
                         state.scenario_key = rng.choice([c["key"] for c in contracts])
                     intro_start_ms = pygame.time.get_ticks()
+                    intro_page = 0
                     mode = "intro"
                     collect_anim_list.clear()
                     continue
@@ -3081,7 +3149,14 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                                             break
                                     dropped_on_active = True
                                 else:
-                                    if card.key in ("real_time_api", "batch_processing"):
+                                    # Carbon rule: only allow 1 carbon_footprint in ACTIVE.
+                                    if card.key == "carbon_footprint":
+                                        for j in range(cap):
+                                            oc = state.active_slots[j] if j < len(state.active_slots) else None
+                                            if oc and oc.key == "carbon_footprint":
+                                                conflict_slot = j
+                                                break
+                                    elif card.key in ("real_time_api", "batch_processing"):
                                         other = "batch_processing" if card.key == "real_time_api" else "real_time_api"
                                         for j in range(cap):
                                             oc = state.active_slots[j] if j < len(state.active_slots) else None
@@ -3112,7 +3187,13 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                                     rects = card_rects()
                                     if dragging_hand_idx < len(rects) and rects[dragging_hand_idx].collidepoint(mouse_low):
                                         conflict_slot_click = None
-                                        if card.key in ("real_time_api", "batch_processing"):
+                                        if card.key == "carbon_footprint":
+                                            for j in range(cap):
+                                                oc = state.active_slots[j] if j < len(state.active_slots) else None
+                                                if oc and oc.key == "carbon_footprint":
+                                                    conflict_slot_click = j
+                                                    break
+                                        elif card.key in ("real_time_api", "batch_processing"):
                                             other = "batch_processing" if card.key == "real_time_api" else "real_time_api"
                                             for j in range(cap):
                                                 oc = state.active_slots[j] if j < len(state.active_slots) else None
