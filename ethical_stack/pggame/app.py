@@ -49,6 +49,8 @@ PAPER_DARK = (214, 208, 196)
 RED = (220, 72, 72)
 BLUE = (60, 140, 220)
 WHITE = (255, 255, 255)
+# Common rarity green (matches the "COMMON" text color used in hover panels).
+COMMON_GREEN = (80, 210, 130)
 # Epic rarity (matches hover label); used for frame + godray tint.
 EPIC_PURPLE = (160, 90, 220)
 # Epic: extra margin around the face rect so godrays render *behind* the card but stay visible as a halo.
@@ -312,12 +314,16 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         return r if r in ("common", "rare", "epic", "cursed") else "common"
 
     def card_frame_outer_color(c: Card) -> Tuple[int, int, int]:
-        """Outer frame: rare/epic match rarity text colors; others use suit colors."""
+        """Outer frame color based on card rarity."""
         r = _normalize_card_rarity(c)
         if r == "rare":
             return BLUE
+        if r == "common":
+            return COMMON_GREEN
         if r == "epic":
             return EPIC_PURPLE
+        if r == "cursed":
+            return RED
         return card_border_color(c)
 
     # Cursed: one horns.png (both horns), centered on top. Epic: godray layer (helpers below).
