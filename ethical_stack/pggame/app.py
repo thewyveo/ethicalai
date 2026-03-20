@@ -1038,6 +1038,31 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             locked_wrong = i in phase2_wrong_locked
             hovered = phase2_hover_i == i and phase2_subphase == "play" and not locked_wrong
 
+            if phase2_subphase == "anim":
+                # Fade the whole animated-to-middle card uniformly.
+                # Without this, blending differences against the dark UI panel can make it look like only part fades.
+                fade_alpha = int(255 * max(0.0, 1.0 - phase2_anim_progress))
+                if fade_alpha > 0:
+                    pw, ph, pp = _padded_face_wh(card, r.w, r.h)
+                    card_surf = pygame.Surface((pw, ph), pygame.SRCALPHA)
+                    draw_epic_rays_on_card_surface(card_surf, card, pw, ph)
+
+                    has_art = card.art and card.art in card_art_surfs
+                    if has_art:
+                        art_surf = _phase2_get_scaled_art(card.art, r.w, r.h)
+                        card_surf.blit(art_surf, (pp, pp))
+                    else:
+                        draw_pixel_border(card_surf, pygame.Rect(pp, pp, r.w, r.h), PAPER, outer)
+                        pip = rtxt(font_small, card.suit[0].upper(), card_border_color(card), bold_px=0)
+                        card_surf.blit(pip, (pp + 4, pp + 3))
+
+                    draw_pixel_frame(card_surf, pygame.Rect(pp, pp, r.w, r.h), outer, PAPER_DARK)
+                    draw_cursed_horns_on_card_surface(card_surf, card, r.w, r.h, ox=pp, oy=pp)
+
+                    card_surf.set_alpha(max(0, min(255, fade_alpha)))
+                    screen.blit(card_surf, (r.x - pp, r.y - pp))
+                continue
+
             if hovered:
                 # Reuse the original "active card wobble": rotate the whole card.
                 angle = math.sin((frame * 0.22) + i * 1.1) * 2.0
@@ -1089,7 +1114,9 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             yc = int(start_r.centery + (target_center[1] - start_r.centery) * ease - arc_h * math.sin(math.pi * ease))
             rot = math.sin(math.pi * ease) * 10.0
             pop_scale = 1.0 + 0.08 * math.sin(math.pi * ease)
-            alpha = int(255 * (1.0 - ease) ** 1.2)
+            # Fade out faster as the card approaches the middle target.
+            # (Use linear t so fading isn't delayed by the easing curve.)
+            alpha = int(255 * (1.0 - t) ** 2.2)
 
             # Render the card into a surface once per frame (small N so it's fine).
             tw, th, tp = _padded_face_wh(card, start_r.w, start_r.h)
@@ -1106,8 +1133,14 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             draw_pixel_frame(base, pygame.Rect(tp, tp, start_r.w, start_r.h), outer, PAPER_DARK)
             draw_cursed_horns_on_card_surface(base, card, start_r.w, start_r.h, ox=tp, oy=tp)
 
+            # Apply fade by scaling the per-pixel alpha directly.
+            # Using surface-wide set_alpha after rotozoom can look non-uniform when
+            # the card overlaps semi-transparent UI areas.
+            a = max(0, min(255, alpha))
+            if a < 255:
+                base.fill((255, 255, 255, a), special_flags=pygame.BLEND_RGBA_MULT)
+
             animated = pygame.transform.rotozoom(base, rot, pop_scale)
-            animated.set_alpha(max(0, min(255, alpha)))
             screen.blit(animated, animated.get_rect(center=(xc, yc)))
 
         # Phase 2 hover label: title only.

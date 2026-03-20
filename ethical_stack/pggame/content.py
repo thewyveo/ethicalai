@@ -17,27 +17,27 @@ def get_contracts() -> List[Dict[str, Any]]:
         {
             "key": "healthcare",
             "name": "Healthcare AI",
-            "requirements": {"transparency": 9, "stability": 6, "integrity": 8, "generalizability": 5, "automation": 2},
+            "requirements": {"transparency": 8, "stability": 6, "integrity": 7, "generalizability": 5, "automation": 2},
         },
         {
             "key": "startup",
             "name": "Startup AI",
-            "requirements": {"automation": 5, "stability": 5, "transparency": 4, "generalizability": 8, "integrity": 4},
+            "requirements": {"automation": 5, "stability": 5, "transparency": 4, "generalizability": 7, "integrity": 4},
         },
         {
             "key": "government",
             "name": "Government AI",
-            "requirements": {"transparency": 7, "integrity": 7, "stability": 6, "generalizability": 3, "automation": 4},
+            "requirements": {"transparency": 6, "integrity": 6, "stability": 5, "generalizability": 3, "automation": 4},
         },
         {
             "key": "social_media",
             "name": "Social Media Algorithm",
-            "requirements": {"automation": 8, "integrity": 5, "generalizability": 2, "transparency": 3, "stability": 5},
+            "requirements": {"automation": 7, "integrity": 4, "generalizability": 2, "transparency": 3, "stability": 5},
         },
         {
             "key": "defense",
             "name": "Defensive / Military AI",
-            "requirements": {"automation": 10, "stability": 8, "integrity": 3, "transparency": 3, "generalizability": 3},
+            "requirements": {"automation": 10, "stability": 8, "integrity": 2, "transparency": 2, "generalizability": 2},
         },
     ]
 
@@ -85,8 +85,9 @@ def get_scenario_objective_lines(contract_key: Optional[str]) -> Tuple[str, str,
     }.get(contract_key, "Tune your active deck to the contract thresholds.")
 
     short = {"transparency": "Trnsprcy.", "stability": "Stblty.", "automation": "Automtn.", "generalizability": "Genrlzblty.", "integrity": "Intgrty."}
-    parts = [f"{short.get(s, s)} > {val}" for s, val in req.items()]
-    line3 = ", ".join(parts)
+    parts = [f"{val} {short.get(s, s)}" for s, val in req.items()]
+    line3_j = ", ".join(parts)
+    line3 = "Requirements: " + line3_j
     return line1, setting, line3
 
 
