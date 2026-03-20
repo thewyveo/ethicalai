@@ -482,7 +482,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
     collect_anim_list: List[Tuple[Card, pygame.Rect, float]] = []  # (card, start_rect, progress 0..1)
     collect_anim_frames_per_card = 20
 
-    message = "Click deck to draw & advance. Max 3 in hand. Active cards = your stats."
+    message = "Click deck to draw & advance. Max 5 in hand. Active cards = your stats."
     story_line = "Objective will be set when you start."
     objective_setting_line = ""
     objective_stats_line = ""
@@ -799,6 +799,9 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         screen.blit(label, (lx, ly))
         for i, r in enumerate(slot_rects):
             card = state.active_slots[i] if i < len(state.active_slots) else None
+            # While dragging, hide the card in its original slot (only the mouse-drag copy is rendered).
+            if dragging_active_idx is not None and i == dragging_active_idx:
+                card = None
             if card:
                 # Card present: draw with same shake/wobble as old selected-hand-cards animation
                 outer = card_frame_outer_color(card)
@@ -1337,6 +1340,8 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             if new_count == old_count:
                 rects = card_rects()
                 for i, (c, r) in enumerate(zip(hand, rects)):
+                    if dragging_hand_idx is not None and i == dragging_hand_idx:
+                        continue
                     outer = card_frame_outer_color(c)
                     if i == hidden_hand_index and deck_back_card_surf is not None:
                         screen.blit(deck_back_card_surf, r)
@@ -1393,6 +1398,8 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 y = card_base_y - (5 if i in selected else 0)
                 r = pygame.Rect(x, y, w, h)
                 outer = card_frame_outer_color(c)
+                if dragging_hand_idx is not None and i == dragging_hand_idx:
+                    continue
                 if i == hidden_hand_index and deck_back_card_surf is not None:
                     screen.blit(deck_back_card_surf, r)
                 elif i in selected:
@@ -1448,6 +1455,8 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         # Normal (no animation): draw real hand; selected cards get a slight shake/wobble.
         rects = card_rects()
         for i, (c, r) in enumerate(zip(hand, rects)):
+            if dragging_hand_idx is not None and i == dragging_hand_idx:
+                continue
             outer = card_frame_outer_color(c)
             inner = PAPER_DARK
             if i == hidden_hand_index and deck_back_card_surf is not None:
@@ -1674,7 +1683,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 deck_mask = pygame.Surface((CARD_W - mask_inset * 2, CARD_H - mask_inset * 2), pygame.SRCALPHA)
                 deck_mask.fill((220, 72, 72, red_alpha))
                 screen.blit(deck_mask, (deck_rect.x + mask_inset, deck_rect.y + mask_inset))
-                warn_text = "Max 3 cards at hand" if deck_warning_hand_full else "No cards to draw."
+                warn_text = "Max 5 cards at hand" if deck_warning_hand_full else "No cards to draw."
                 warn = rtxt(font_tiny, warn_text, RED, bold_px=1)
                 warn.set_colorkey((0, 0, 0))
                 wx = deck_rect.centerx - warn.get_width() // 2
@@ -1735,12 +1744,12 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             screen.blit(rr, (20, y))
             y += line_step
         y += 12
-        for line in wrap_text("You have 10 rounds. Build your stats with Active cards. Click deck to draw & advance. Max 3 in hand. Meet the objective by round 10 to win.", LOW_W - 28):
+        for line in wrap_text("You have 10 rounds. Build your stats with Active cards. Click deck to draw & advance. Max 5 in hand. Meet the objective by round 10 to win.", LOW_W - 28):
             rr = rtxt(font_tiny, line, (200, 198, 188), bold_px=0)
             screen.blit(rr, (20, y))
             y += line_step
         tip = rtxt(font_small, "Click anywhere to begin. ESC quits.", GOLD)
-        screen.blit(tip, (14, LOW_H - 20))
+        screen.blit(tip, (14, LOW_H - 30))
 
     def draw_menu() -> None:
         nonlocal menu_play_rect, menu_credits_rect, menu_settings_rect, menu_admin_rect
@@ -1775,8 +1784,8 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         draw_pixel_border(screen, menu_admin_rect, GOLD, (80, 70, 40))
         atxt = rtxt(font_small, "Admin Phase2", INK)
         screen.blit(atxt, (menu_admin_rect.centerx - atxt.get_width() // 2, menu_admin_rect.centery - atxt.get_height() // 2))
-        esc = rtxt(font_small, "ESC to quit", (160, 158, 148), bold_px=0)
-        screen.blit(esc, (LOW_W - esc.get_width() - 12, LOW_H - 20))
+        esc = rtxt(font_small, "ESC to quit.", GOLD, bold_px=0)
+        screen.blit(esc, (LOW_W - esc.get_width() - 20, LOW_H - 30))
 
     def draw_credits() -> None:
         """Credits: background and text/logos only, no borders or boxes."""
