@@ -78,7 +78,7 @@ def get_scenario_objective_lines(contract_key: Optional[str]) -> Tuple[str, str,
 
     setting = {
         "healthcare": "Patient safety first: raise stability, integrity & transparency.",
-        "startup": "Needs novelty: generalizability.",
+        "startup": "Needs novelty: shoot for generalizability.",
         "government": "Reliability: emphasize transparency & integrity.",
         "social_media": "Scale responsibly: push automation, integrity & stability.",
         "defense": "Operational readiness: prioritize automation & stability.",

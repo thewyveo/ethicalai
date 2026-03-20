@@ -99,7 +99,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
     rng = random.Random(seed)
 
     window = pygame.display.set_mode((W, H))
-    pygame.display.set_caption("Ethical Stack — Balatro-ish prototype")
+    pygame.display.set_caption("ETHICAL STACK")
 
     screen = pygame.Surface((LOW_W, LOW_H))
 
@@ -228,6 +228,16 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
     # User preference (Settings); independent of mixer init failure.
     sfx_on = True
 
+    # Dev-only: show/enable the Admin Phase2 menu button.
+    # Default is disabled; enable by setting `EAI_ADMIN_PHASE2=1` (or true/yes).
+    ADMIN_PHASE2_ENABLED = os.environ.get("EAI_ADMIN_PHASE2", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+        "dev",
+    )
+
     def play_sfx(name: str) -> None:
         if not sfx_on:
             return
@@ -318,6 +328,40 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             horns_raw = pygame.image.load(_horns_path).convert_alpha()
         except Exception:
             horns_raw = None
+    # Intro tutorial overlays.
+    cursor_raw: Optional[pygame.Surface] = None
+    _cursor_paths = [
+        os.path.join(_src_dir, "cursor.webp"),
+        os.path.join(_src_dir, "cursor.png"),
+    ]
+    for _cp in _cursor_paths:
+        if os.path.isfile(_cp):
+            try:
+                cursor_raw = pygame.image.load(_cp).convert_alpha()
+                break
+            except Exception:
+                cursor_raw = None
+
+    question_mark_raw: Optional[pygame.Surface] = None
+    _q_paths = [
+        os.path.join(_src_dir, "question_mark.webp"),
+        os.path.join(_src_dir, "question_mark.png"),
+    ]
+    for _qp in _q_paths:
+        if os.path.isfile(_qp):
+            try:
+                question_mark_raw = pygame.image.load(_qp).convert_alpha()
+                break
+            except Exception:
+                question_mark_raw = None
+
+    _intro_cursor_scaled_cache: Dict[Tuple[int, int], pygame.Surface] = {}
+    _intro_question_scaled_cache: Dict[Tuple[int, int], pygame.Surface] = {}
+    _intro_mini_card_face_cache: Dict[Tuple[str, int, int], pygame.Surface] = {}
+    _intro_mini_deck_cache: Dict[Tuple[int, int], pygame.Surface] = {}
+    _intro_demo_art_keys: List[str] = sorted(card_art_surfs.keys())
+    _intro_demo_card_key_1: Optional[str] = _intro_demo_art_keys[0] if _intro_demo_art_keys else None
+    _intro_demo_card_key_2: Optional[str] = _intro_demo_art_keys[1] if len(_intro_demo_art_keys) > 1 else _intro_demo_card_key_1
     _horn_sprite_cache: Dict[Tuple[int, int], pygame.Surface] = {}
     _epic_ray_base_cache: Dict[Tuple[str, int], pygame.Surface] = {}
 
@@ -490,6 +534,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
     hover_idx: int | None = None
     hover_active_idx: Optional[int] = None
     frame: int = 0
+    intro_start_ms: Optional[int] = None
     game_over_retry_rect: Optional[pygame.Rect] = None
     game_over_menu_rect: Optional[pygame.Rect] = None
     game_over_primary_is_menu: bool = False
@@ -1732,29 +1777,693 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         draw_tiled_background()
         draw_pixel_border(screen, pygame.Rect(8, 8, LOW_W - 16, LOW_H - 16), FELT_DARK, GOLD)
         scenario_name = get_contract_name(state.scenario_key)
-        objective_text = get_scenario_objective_text(state.scenario_key)
+        # Objective block: scenario-specific *setting/explanation* (content.py line 2),
+        # with "Objective:" removed (we only show the scenario name above).
+        _line1, setting_line, _line3 = get_scenario_objective_lines(state.scenario_key)
+        objective_text = setting_line
+
         title = rtxt(font_big, "DEPLOYMENT SCENARIO", GOLD)
         screen.blit(title, ((LOW_W - title.get_width()) // 2, 24))
         sub = rtxt(font_small, scenario_name, PAPER)
         screen.blit(sub, ((LOW_W - sub.get_width()) // 2, 52))
-        y = 76
-        line_step = font_small.get_linesize() + 4
+
+        # Objective text centered under the scenario name.
+        # Requirements/description block starts slightly below the scenario title.
+        objective_y = 76 + 15
+        objective_step = font_small.get_linesize() + 4
+        # Requirements label (red), inserted between scenario name and description.
+        req_label = rtxt(font_small, "Requirements:", RED, bold_px=1)
+        screen.blit(req_label, ((LOW_W - req_label.get_width()) // 2, objective_y))
+        objective_y += objective_step
         for line in wrap_text(objective_text, LOW_W - 28):
             rr = rtxt(font_small, line, (210, 208, 198), bold_px=0)
-            screen.blit(rr, (20, y))
-            y += line_step
-        y += 12
-        for line in wrap_text("You have 10 rounds. Build your stats with Active cards. Click deck to draw & advance. Max 5 in hand. Meet the objective by round 10 to win.", LOW_W - 28):
-            rr = rtxt(font_tiny, line, (200, 198, 188), bold_px=0)
-            screen.blit(rr, (20, y))
-            y += line_step
-        tip = rtxt(font_small, "Click anywhere to begin. ESC quits.", GOLD)
-        screen.blit(tip, (14, LOW_H - 30))
+            screen.blit(rr, ((LOW_W - rr.get_width()) // 2, objective_y))
+            objective_y += objective_step
+
+        # Gap between the scenario subtitle block and the "HOW TO PLAY" title.
+        objective_y += 50
+
+        # Fade-in timing: HOW TO PLAY section starts 1.5s after the page opens.
+        elapsed_ms = 0
+        if intro_start_ms is not None:
+            elapsed_ms = max(0, pygame.time.get_ticks() - intro_start_ms)
+        # Fade-in timing: start a bit earlier (requested shorter total effect).
+        fade_delay_ms = 800
+        fade_duration_ms = 500
+        how_mult = 0.0
+        if elapsed_ms > fade_delay_ms:
+            how_mult = min(1.0, (elapsed_ms - fade_delay_ms) / float(fade_duration_ms))
+        how_alpha = int(255 * how_mult)
+
+        how_title_surf = rtxt(font_big, "HOW TO PLAY", GOLD)
+        if how_alpha < 255:
+            how_title_surf.set_alpha(how_alpha)
+        screen.blit(how_title_surf, ((LOW_W - how_title_surf.get_width()) // 2, objective_y))
+
+        # Split the remaining area into two vertical halves.
+        split_top = objective_y + how_title_surf.get_height() + 10
+        usable_x0 = 20
+        usable_x1 = LOW_W - 8
+        usable_w = max(1, usable_x1 - usable_x0)
+        half_w = usable_w // 2
+        left_x = usable_x0
+        right_x = usable_x0 + half_w
+        block_inset_x = min(12, max(6, half_w // 12))
+
+        line_color = (200, 198, 188)
+        phase_title_color = PAPER
+        active_color = GOLD
+
+        phase1_inner_shift_x = 8
+        # Phase 2 inner lines: extra right shift for readability.
+        phase2_inner_shift_x = 56
+
+        def _blit_left_line(x: int, yy: int, s: str, *, bold: bool = False, col: Tuple[int, int, int] = line_color) -> pygame.Surface:
+            surf = rtxt(font_tiny, s, col, bold_px=1 if bold else 0)
+            if how_alpha < 255:
+                surf.set_alpha(how_alpha)
+            screen.blit(surf, (x, yy))
+            return surf
+
+        def _blit_phase_title(prefix: str, rest: str, center_x: int, y: int) -> None:
+            # Prefix bolded (“PHASE 1:” / “PHASE 2:”).
+            sp = rtxt(font_small, prefix, phase_title_color, bold_px=1)
+            sr = rtxt(font_small, rest, phase_title_color, bold_px=0)
+            if how_alpha < 255:
+                sp.set_alpha(how_alpha)
+                sr.set_alpha(how_alpha)
+            total_w = sp.get_width() + sr.get_width()
+            sx = center_x - total_w // 2
+            screen.blit(sp, (sx, y))
+            screen.blit(sr, (sx + sp.get_width(), y))
+
+        line_step_tiny = font_tiny.get_linesize() + 3
+
+        # --- Phase 1 ---
+        phase1_center_x = left_x + half_w // 2
+        _blit_phase_title("PHASE 1:", " Build", phase1_center_x, split_top)
+
+        p1_title_h = font_small.get_height() if hasattr(font_small, "get_height") else font_small.get_linesize()
+        p1_y = split_top + (rtxt(font_small, "PHASE 1: Build", phase_title_color, bold_px=0)).get_height() + 8
+        # Draw cards from DECK: only the word "DECK" is yellow + bold like ACTIVE.
+        x_cursor = left_x + block_inset_x + phase1_inner_shift_x
+        s1 = _blit_left_line(x_cursor, p1_y, "Draw cards from ", bold=False, col=line_color)
+        x_cursor += s1.get_width()
+        s2 = _blit_left_line(x_cursor, p1_y, "DECK", bold=True, col=active_color)
+        x_cursor += s2.get_width()
+        _blit_left_line(x_cursor, p1_y, ". Max 5 in hand.", bold=False, col=line_color)
+        p1_y += line_step_tiny
+
+        # Fill ACTIVE slots to shape your stats.
+        x_cursor = left_x + block_inset_x + phase1_inner_shift_x
+        prefix = _blit_left_line(x_cursor, p1_y, "Fill ")
+        x_cursor += prefix.get_width()
+        active = _blit_left_line(x_cursor, p1_y, "ACTIVE", bold=True, col=active_color)
+        x_cursor += active.get_width()
+        _blit_left_line(x_cursor, p1_y, " slots to shape your stats.")
+        p1_y += line_step_tiny
+
+        # Phase 1 line: only the words "scenario requirements" are red.
+        _x_req = left_x + block_inset_x + phase1_inner_shift_x
+        _meet_s = rtxt(font_tiny, "Meet ", line_color, bold_px=0)
+        _req_s = rtxt(font_tiny, "scenario requirements", RED, bold_px=0)
+        _suf_s = rtxt(font_tiny, " before Round 10.", line_color, bold_px=0)
+        if how_alpha < 255:
+            _meet_s.set_alpha(how_alpha)
+            _req_s.set_alpha(how_alpha)
+            _suf_s.set_alpha(how_alpha)
+        screen.blit(_meet_s, (_x_req, p1_y))
+        _x_req += _meet_s.get_width()
+        screen.blit(_req_s, (_x_req, p1_y))
+        _x_req += _req_s.get_width()
+        screen.blit(_suf_s, (_x_req, p1_y))
+
+        # --- Phase 2 ---
+        phase2_center_x = right_x + half_w // 2
+        _blit_phase_title("PHASE 2:", " Action", phase2_center_x, split_top)
+
+        p2_y = split_top + (rtxt(font_small, "PHASE 2: Action", phase_title_color, bold_px=0)).get_height() + 8
+        # ACTIVE cards become your hand.
+        x_cursor = right_x + block_inset_x + phase2_inner_shift_x
+        active = _blit_left_line(x_cursor, p2_y, "ACTIVE", bold=True, col=active_color)
+        x_cursor += active.get_width()
+        _blit_left_line(x_cursor, p2_y, " cards become your hand.")
+        p2_y += line_step_tiny
+
+        _blit_left_line(right_x + block_inset_x + phase2_inner_shift_x, p2_y, "Respond to ethical scenarios.")
+        p2_y += line_step_tiny
+
+        # 4/5 correct answers to win.
+        x_cursor = right_x + block_inset_x + phase2_inner_shift_x
+        n_b = _blit_left_line(x_cursor, p2_y, "4/5", bold=True, col=RED)
+        x_cursor += n_b.get_width()
+        _blit_left_line(x_cursor, p2_y, " correct answers to win.")
+
+        # --- Intro tutorial mini-animations (cursor/cards) ---
+        # These run under the Phase 1/Phase 2 text blocks and loop with a 1s delay.
+        # No sound effects are used.
+        if cursor_raw is not None or question_mark_raw is not None:
+            t_intro = elapsed_ms
+
+            def _clamp01(v: float) -> float:
+                return max(0.0, min(1.0, v))
+
+            def _lerp(a: float, b: float, u: float) -> float:
+                return a + (b - a) * u
+
+            # Small graphics size (keeps everything side-by-side under phases).
+            mini_card_w = int(max(52, min(72, half_w * 0.22)))
+            mini_card_h = int(max(52, min(95, mini_card_w * (CARD_H / float(CARD_W)))))
+            gap_small = max(4, int(mini_card_w * 0.08))
+            # Bigger inter-group spacing: decks on left, 2 hand cards on right.
+            gap_big = gap_small + 28
+
+            cursor_w = int(max(18, min(34, mini_card_w * 0.55)))
+            cursor_h = int(cursor_w * (cursor_raw.get_height() / float(cursor_raw.get_width()))) if cursor_raw is not None else cursor_w
+
+            q_w = int(max(16, min(30, mini_card_w * 0.45)))
+            q_h = int(q_w * (question_mark_raw.get_height() / float(question_mark_raw.get_width()))) if question_mark_raw is not None else q_w
+
+            def _get_scaled_from_cache(raw: Optional[pygame.Surface], cache: Dict[Tuple[int, int], pygame.Surface], w: int, h: int) -> Optional[pygame.Surface]:
+                if raw is None:
+                    return None
+                key = (w, h)
+                hit = cache.get(key)
+                if hit is not None:
+                    return hit
+                try:
+                    scaled = pygame.transform.smoothscale(raw, (w, h))
+                except Exception:
+                    scaled = None
+                if scaled is not None:
+                    cache[key] = scaled
+                return cache.get(key)
+
+            cursor_mini = _get_scaled_from_cache(cursor_raw, _intro_cursor_scaled_cache, cursor_w, cursor_h)
+            q_mini = _get_scaled_from_cache(question_mark_raw, _intro_question_scaled_cache, q_w, q_h)
+
+            def _get_mini_card_face(art_key: Optional[str]) -> pygame.Surface:
+                # Cache the non-faded face (alpha handled by copy + set_alpha).
+                key = (art_key or "__none__", mini_card_w, mini_card_h)
+                hit = _intro_mini_card_face_cache.get(key)
+                if hit is not None:
+                    return hit
+                surf = pygame.Surface((mini_card_w, mini_card_h), pygame.SRCALPHA)
+                # Base card face.
+                surf.fill((*PAPER, 255))
+                draw_pixel_frame(surf, pygame.Rect(0, 0, mini_card_w, mini_card_h), GOLD, PAPER_DARK)
+                if art_key and art_key in card_art_surfs:
+                    art = pygame.transform.smoothscale(card_art_surfs[art_key], (mini_card_w - 4, mini_card_h - 4))
+                    surf.blit(art, (2, 2))
+                _intro_mini_card_face_cache[key] = surf
+                return surf
+
+            # Mini deck (front/back stand-in).
+            deck_w, deck_h = mini_card_w, mini_card_h
+            if deck_back_card_surf is not None:
+                deck_key = (deck_w, deck_h)
+                deck_mini = _intro_mini_deck_cache.get(deck_key)
+                if deck_mini is None:
+                    deck_mini = pygame.transform.smoothscale(deck_back_card_surf, (deck_w, deck_h))
+                    _intro_mini_deck_cache[deck_key] = deck_mini
+            else:
+                deck_mini = None
+
+            # Vertical anchors under the text blocks.
+            phase1_line_bottom = p1_y + line_step_tiny + 10
+            phase2_line_bottom = p2_y + line_step_tiny + 16
+
+            # Phase 1 mini group positions (deck + 2 cards on the left side).
+            group_center_x1 = left_x + half_w // 2
+            group_w1 = deck_w + gap_big + mini_card_w + gap_small + mini_card_w
+            group_left_x1 = group_center_x1 - group_w1 // 2
+            # Layout: top row = 2 cards, second row = deck (under them).
+            # Shift cards left + down so they don't interfere with the phase text.
+            # Deck movement: 15px left, 35px down (relative to current layout).
+            deck_y1 = phase1_line_bottom + 73  # 38 + 35
+            # Hand/card movement: +20px down.
+            # Align hand cards with the decks/ACTIVE slot (same horizontal axis).
+            cards_top_y1 = deck_y1
+            card1_x1 = left_x + block_inset_x + 20
+            card2_x1 = card1_x1 + mini_card_w + gap_small
+            card1_y1 = cards_top_y1
+            card2_y1 = cards_top_y1
+            # Deck is slightly shifted left to create extra margin before the first drawn card.
+            deck_x1 = (card1_x1 + card2_x1 + mini_card_w) // 2 - deck_w // 2 - (gap_small + 8 + 15) + 35
+
+            # Phase 1 active slots (two slots, cursor drags left card into left slot).
+            # Bring active slots up so they don't run out of the window.
+            # ACTIVE movement: up 70px for fit, then extra 15px up.
+            slot_y1 = deck_y1
+            slot_gap_x1 = gap_small * 2
+            slot_w_total1 = mini_card_w * 2 + slot_gap_x1
+            # ACTIVE movement: +5px right.
+            # Move ACTIVE (and the mini DECK sitting on top of it) to the right by +95px total.
+            slot1_x1 = left_x + block_inset_x + 15 + 50 + 45
+            slot2_x1 = slot1_x1 + mini_card_w + slot_gap_x1
+            slot_h1 = mini_card_h
+
+            # Place the mini DECK exactly where the ACTIVE slot will appear.
+            deck_x1 = slot1_x1
+            deck_y1 = slot_y1
+
+            # Hand cards on the right, with a larger gap from the decks than between the hand cards.
+            card1_x1 = deck_x1 + deck_w + gap_big
+            card2_x1 = card1_x1 + mini_card_w + gap_small
+            card1_y1 = deck_y1
+            card2_y1 = deck_y1
+
+            # Shift the entire Phase 1 mini-animation area into its final position.
+            # (All cursor/cards/decks/active anchors are derived from these.)
+            phase1_mini_dx = -95
+            phase1_mini_dy = -35
+            deck_x1 += phase1_mini_dx
+            deck_y1 += phase1_mini_dy
+            slot1_x1 += phase1_mini_dx
+            slot2_x1 += phase1_mini_dx
+            slot_y1 += phase1_mini_dy
+            card1_x1 += phase1_mini_dx
+            card2_x1 += phase1_mini_dx
+            card1_y1 += phase1_mini_dy
+            card2_y1 += phase1_mini_dy
+
+            card_face_a = _get_mini_card_face(_intro_demo_card_key_1)
+            card_face_b = _get_mini_card_face(_intro_demo_card_key_2)
+
+            # Cursor bubble positioning.
+            def _blit_alpha(surf: pygame.Surface, x: int, y: int, alpha: int) -> None:
+                if alpha <= 0:
+                    return
+                if alpha >= 255:
+                    screen.blit(surf, (x, y))
+                    return
+                # Multiply alpha into the surface to avoid fringe/black-box artifacts
+                # that can happen when using set_alpha on certain scaled WEBP assets.
+                cp = surf.copy()
+                cp.fill((255, 255, 255, max(0, min(255, alpha))), special_flags=pygame.BLEND_RGBA_MULT)
+                screen.blit(cp, (x, y))
+
+            def _slot_surf(x: int, y: int, alpha: int) -> None:
+                if alpha <= 0:
+                    return
+                slot = pygame.Surface((mini_card_w, mini_card_h), pygame.SRCALPHA)
+                slot.fill((*FELT_DARK, 255))
+                draw_pixel_border(slot, pygame.Rect(0, 0, mini_card_w, mini_card_h), FELT_DARK, GOLD)
+                _blit_alpha(slot, x, y, alpha)
+
+            # Phase 2 positions (active slots + question mark + cursor/click).
+            group_center_x2 = right_x + half_w // 2
+            slot_w_total2 = mini_card_w * 2 + gap_small * 2
+            slot_group_left_x2 = group_center_x2 - slot_w_total2 // 2
+            slot1_x2 = slot_group_left_x2
+            slot2_x2 = slot1_x2 + mini_card_w + gap_small * 2
+            # Move the whole mini hand/cursor area up by ~10px.
+            slot_y2 = phase2_line_bottom + 30
+            slot_w2 = mini_card_w
+
+            # Timing: start after HOW TO PLAY finishes fading in.
+            anim1_start = fade_delay_ms + fade_duration_ms
+            anim1_seq = 6900
+            anim1_pause = 1000
+            anim1_cycle = anim1_seq + anim1_pause
+            anim1_fade_out_start = 6300
+
+            # Start Phase 2 tutorial at the same time as Phase 1.
+            anim2_start = anim1_start
+            anim2_seq = 5100
+            anim2_pause = 1000
+            anim2_cycle = anim2_seq + anim2_pause
+
+            # --- Animation 1 (Phase 1) ---
+            t1 = t_intro - anim1_start
+            if t1 >= 0:
+                t1m = t1 % anim1_cycle
+                if t1m < anim1_seq:
+                    # Cursor visuals were previously too high: push down to match the intended click target.
+                    cursor_y_offset = 40
+                    u = t1m / float(anim1_seq)
+                    global_out = 1.0
+                    if t1m > anim1_fade_out_start:
+                        global_out = 1.0 - _clamp01((t1m - anim1_fade_out_start) / float(anim1_seq - anim1_fade_out_start))
+                    global_out_a = int(255 * global_out)
+
+                    deck_in_end = 1200
+                    deck_hold_end = 2550
+                    deck_out_end = 3450
+
+                    def _piece_alpha(t: float, a: float, b: float) -> float:
+                        return _clamp01((t - a) / float(b - a)) if b > a else 1.0
+
+                    deck_a = 0.0
+                    if t1m < deck_in_end:
+                        deck_a = _piece_alpha(t1m, 0, deck_in_end)
+                    elif t1m < deck_hold_end:
+                        deck_a = 1.0
+                    elif t1m < deck_out_end:
+                        deck_a = 1.0 - _clamp01((t1m - deck_hold_end) / float(deck_out_end - deck_hold_end))
+                    else:
+                        deck_a = 0.0
+                    deck_alpha = int(deck_a * global_out_a)
+
+                    # Cursor fades in and performs the "click deck" motion.
+                    cur_a = 0.0
+                    if t1m < 750:
+                        cur_a = 0.0
+                    elif t1m < 1350:
+                        cur_a = _piece_alpha(t1m, 750, 1350)
+                    else:
+                        cur_a = 1.0
+                    cursor_alpha = int(cur_a * global_out_a)
+
+                    # Cards fade in after the click and slide into place.
+                    cards_in_start = 2400
+                    cards_in_end = 3100
+                    cards_a = 0.0
+                    if t1m < cards_in_start:
+                        cards_a = 0.0
+                    elif t1m < cards_in_end:
+                        cards_a = _clamp01((t1m - cards_in_start) / float(cards_in_end - cards_in_start))
+                    else:
+                        cards_a = 1.0
+
+                    card1_alpha = int(cards_a * global_out_a)
+                    card2_alpha = int(cards_a * global_out_a)
+
+                    # Active slots fade in after deck fades out.
+                    # Start ACTIVE after the deck is fully faded away.
+                    active_in_start = 3600
+                    active_in_end = 3900
+                    active_a = 0.0
+                    if t1m < active_in_start:
+                        active_a = 0.0
+                    elif t1m < active_in_end:
+                        active_a = _clamp01((t1m - active_in_start) / float(active_in_end - active_in_start))
+                    else:
+                        active_a = 1.0
+                    active_alpha = int(active_a * global_out_a)
+
+                    # Drag card1 into slot1.
+                    drag_start = 3900
+                    drag_end = 5700
+                    drag_u = _clamp01((t1m - drag_start) / float(drag_end - drag_start)) if t1m >= drag_start else 0.0
+                    card1_x = int(_lerp(card1_x1, slot1_x1, drag_u))
+                    card1_y = int(_lerp(card1_y1, slot_y1, drag_u))
+
+                    # Cursor follows the deck first, then follows the dragged card.
+                    deck_cx = deck_x1 + deck_w // 2
+                    deck_cy = deck_y1 + deck_h // 2
+                    deck_anchor_x = deck_cx - cursor_w // 2
+                    deck_anchor_y = deck_y1 - cursor_h - 10 + cursor_y_offset
+                    # Cursor should track the *drawn* card position during the mini "cards in" slide,
+                    # not the final drag position (to avoid apparent cursor teleport/misalignment).
+                    x_start = deck_x1 + deck_w - 8
+                    if t1m < cards_in_start:
+                        _slide_u_anchor = 0.0
+                    elif t1m < cards_in_end:
+                        _slide_u_anchor = _clamp01((t1m - cards_in_start) / float(cards_in_end - cards_in_start))
+                    else:
+                        _slide_u_anchor = 1.0
+                    card_draw_x = int(_lerp(x_start, card1_x1, _slide_u_anchor))
+                    card_draw_y = card1_y1
+                    # When drag begins, use the dragged position.
+                    if t1m >= drag_start:
+                        card_draw_x = card1_x
+                        card_draw_y = card1_y
+                    card_anchor_x = card_draw_x + mini_card_w // 2 - cursor_w // 2
+                    card_anchor_y = card_draw_y - cursor_h - 4 + cursor_y_offset
+                    cursor_spawn_x = deck_anchor_x - 25
+                    cursor_spawn_y = deck_anchor_y + 50
+                    cursor_draw_x = cursor_spawn_x
+                    cursor_draw_y = cursor_spawn_y
+
+                    # Deck click timing:
+                    # - cursor fades in until ~1350ms
+                    # - click begins 0.3s later (~1650ms)
+                    # Cursor should start clicking the deck 0.5s later.
+                    click_start = 2150
+                    click_end = 2750
+                    # Cursor moves smoothly (no teleport) from spawn -> deck -> card -> drag.
+                    if cursor_mini is not None:
+                        if t1m < click_start:
+                            # Smoothly move from spawn to deck before clicking.
+                            pre_move_start = 750.0
+                            if click_start > pre_move_start:
+                                u_pre = _clamp01((t1m - pre_move_start) / float(click_start - pre_move_start))
+                            else:
+                                u_pre = 1.0
+                            cursor_draw_x = int(_lerp(cursor_spawn_x, deck_anchor_x, u_pre))
+                            cursor_draw_y = int(_lerp(cursor_spawn_y, deck_anchor_y, u_pre))
+                        elif t1m < click_end:
+                            click_u = _clamp01((t1m - click_start) / float(click_end - click_start))
+                            bob = int(8 * (1.0 - abs(2.0 * click_u - 1.0)))
+                            cursor_draw_x = deck_anchor_x
+                            cursor_draw_y = deck_anchor_y + bob
+                        elif t1m < drag_start:
+                            move_u = _clamp01((t1m - click_end) / float(drag_start - click_end))
+                            cursor_draw_x = int(_lerp(deck_anchor_x, card_anchor_x, move_u))
+                            cursor_draw_y = int(_lerp(deck_anchor_y, card_anchor_y, move_u))
+                        else:
+                            cursor_draw_x = card_anchor_x
+                            cursor_draw_y = card_anchor_y
+
+                    # Draw order: deck -> cards -> active slots -> cursor -> drag card placement.
+                    if deck_alpha > 0:
+                        dl = rtxt(font_tiny, "DECK", GOLD, bold_px=1)
+                        dl.set_alpha(max(0, min(255, deck_alpha)))
+                        screen.blit(dl, (deck_x1 + deck_w // 2 - dl.get_width() // 2, deck_y1 - dl.get_height() - 6))
+                    if deck_mini is not None and deck_alpha > 0:
+                        _blit_alpha(deck_mini, deck_x1, deck_y1, deck_alpha)
+                    # Active slot (behind the dragged card as the card moves into it).
+                    if active_alpha > 0:
+                        al = rtxt(font_tiny, "ACTIVE", GOLD, bold_px=1)
+                        al.set_alpha(max(0, min(255, active_alpha)))
+                        screen.blit(al, (slot1_x1 + mini_card_w // 2 - al.get_width() // 2, slot_y1 - al.get_height() - 6))
+                        _slot_surf(slot1_x1, slot_y1, active_alpha)
+
+                    # Card2 stays to the right of deck.
+                    if card2_alpha > 0:
+                        # Slide during cards-in.
+                        if t1m < cards_in_start:
+                            slide_u = 0.0
+                        elif t1m < cards_in_end:
+                            slide_u = _clamp01((t1m - cards_in_start) / float(cards_in_end - cards_in_start))
+                        else:
+                            slide_u = 1.0
+                        x_start = deck_x1 + deck_w - 8
+                        x_now = int(_lerp(x_start, card2_x1, slide_u))
+                        _blit_alpha(card_face_b, x_now, card2_y1, card2_alpha)
+
+                    # Card1 (the one to drag) moves continuously.
+                    if card1_alpha > 0:
+                        # During "cards drawn" it slides into place, then continues to drag.
+                        if t1m < cards_in_start:
+                            slide_u = 0.0
+                        elif t1m < cards_in_end:
+                            slide_u = _clamp01((t1m - cards_in_start) / float(cards_in_end - cards_in_start))
+                        else:
+                            slide_u = 1.0
+                        x_start = deck_x1 + deck_w - 8
+                        x_place = int(_lerp(x_start, card1_x1, slide_u))
+                        y_place = card1_y1
+                        # If dragging already started, override with drag positions.
+                        if t1m >= drag_start:
+                            x_place = card1_x
+                            y_place = card1_y
+                        # Shake the card when it settles into the active slot.
+                        shake_u = 0.0
+                        if t1m >= drag_end:
+                            shake_u = _clamp01((t1m - drag_end) / 1800.0)
+                        if shake_u > 0:
+                            ang = math.sin((frame * 0.22) + 0.7) * (2.5 * shake_u)
+                            sc = 1.0 + 0.04 * shake_u * math.sin(frame * 0.15 + 1.1)
+                            rotated = pygame.transform.rotozoom(card_face_a, ang, sc)
+                            cx = x_place + mini_card_w // 2
+                            cy = y_place + mini_card_h // 2
+                            r = rotated.get_rect(center=(cx, cy))
+                            _blit_alpha(rotated, r.x, r.y, card1_alpha)
+                        else:
+                            _blit_alpha(card_face_a, x_place, y_place, card1_alpha)
+
+                    if cursor_mini is not None and cursor_alpha > 0:
+                        _blit_alpha(cursor_mini, cursor_draw_x, cursor_draw_y, cursor_alpha)
+
+            # --- Animation 2 (Phase 2) ---
+            t2 = t_intro - anim2_start
+            if t2 >= 0:
+                t2m = t2 % anim2_cycle
+                if t2m < anim2_seq:
+                    # Fade out everything at the end of the sequence.
+                    fade_out_start = 4800
+                    fade_out_dur = max(1, anim2_seq - fade_out_start)
+                    global_out = 1.0
+                    if t2m > fade_out_start:
+                        global_out = 1.0 - _clamp01((t2m - fade_out_start) / float(fade_out_dur))
+                    global_out_a = int(255 * global_out)
+
+                    # Active slots with already-cards fade in.
+                    active_in_start = 0
+                    active_in_end = 1500
+                    active_a = _clamp01((t2m - active_in_start) / float(active_in_end - active_in_start)) if t2m > active_in_start else 0.0
+                    active_alpha = int(active_a * global_out_a)
+
+                    # Question mark fades in after active cards.
+                    q_alpha = 0
+                    if q_mini is not None:
+                        q_in_start = 1200
+                        q_in_end = 2100
+                        q_a = 0.0
+                        if t2m < q_in_start:
+                            q_a = 0.0
+                        elif t2m < q_in_end:
+                            q_a = _clamp01((t2m - q_in_start) / float(q_in_end - q_in_start))
+                        else:
+                            q_a = 1.0
+                        q_alpha = int(q_a * global_out_a)
+
+                    # Cursor fades in after question mark.
+                    # Cursor appears after question mark dots.
+                    cur_in_start = 3350
+                    cur_in_end = 3650
+                    cur_a = 0.0
+                    if t2m < cur_in_start:
+                        cur_a = 0.0
+                    elif t2m < cur_in_end:
+                        cur_a = _clamp01((t2m - cur_in_start) / float(cur_in_end - cur_in_start))
+                    else:
+                        cur_a = 1.0
+                    cursor_alpha = int(cur_a * global_out_a)
+
+                    # Click target is the left active card.
+                    # Click first, then the card starts moving toward the question mark.
+                    card_play_start = 4550
+                    card_play_end = 4950
+                    play_u = _clamp01((t2m - card_play_start) / float(card_play_end - card_play_start)) if t2m >= card_play_start else 0.0
+
+                    # Move clicked card up and fade it out.
+                    clicked_card_alpha = int(active_alpha * max(0.0, 1.0 - play_u))
+                    # Move clicked card toward the question mark as it fades.
+                    # Question mark should be ~5px to the right.
+                    q_target_x = slot2_x2 + mini_card_w - q_w // 2 + 11
+                    q_target_y = slot_y2 - q_h - 6 - 15
+                    clicked_card_x = int(_lerp(slot1_x2, q_target_x + q_w // 2 - mini_card_w // 2, play_u))
+                    clicked_card_y = int(_lerp(slot_y2, q_target_y + q_h // 2 - mini_card_h // 2, play_u))
+                    # Question mark fades away with the clicked card, but still keeps
+                    # its own fade-in. So we clamp it down as the clicked card fades.
+                    q_alpha = min(q_alpha, clicked_card_alpha)
+
+                    # Cursor motion: spawn near the destination card bottom-left,
+                    # then take a small arched move onto the card (about 15px up, 5px right),
+                    # and finally do a short click dip (~0.3s after arrival).
+                    target_cx = slot1_x2 + mini_card_w // 2
+                    # Cursor "resting" position above the card (matches the baseline look).
+                    dest_x = target_cx - cursor_w // 2
+                    dest_y = slot_y2 - cursor_h - 6 + 40
+
+                    # Spawn is slightly away from the card bottom-left.
+                    spawn_x = dest_x - 5
+                    spawn_y = dest_y + 15
+
+                    # Move the cursor into position before clicking (card moves later).
+                    move_start = cur_in_end
+                    move_end = 3950  # cursor arrival time
+                    if t2m < move_start:
+                        cursor_x = spawn_x
+                        cursor_y = spawn_y
+                    elif t2m < move_end:
+                        u = _clamp01((t2m - move_start) / float(move_end - move_start))
+                        arch_u = math.sin(math.pi * u)  # 0 at endpoints, 1 in the middle
+                        cursor_x = int(_lerp(spawn_x, dest_x, u) + 5 * arch_u)
+                        cursor_y_lin = int(_lerp(spawn_y, dest_y, u))
+                        cursor_y = cursor_y_lin - int(15 * arch_u)
+                    else:
+                        cursor_x = dest_x
+                        cursor_y = dest_y
+
+                    # Click dip starts after the cursor is correctly positioned.
+                    dip_start = 4250
+                    dip_end = 4550
+                    if t2m >= dip_start:
+                        v = _clamp01((t2m - dip_start) / float(dip_end - dip_start)) if dip_end > dip_start else 1.0
+                        dip_amp = 7
+                        # Peaked down then returns.
+                        dip = dip_amp * (1.0 - abs(2.0 * v - 1.0))
+                        cursor_y = int(dest_y + dip)
+
+                    # Draw order: active cards -> question mark -> cursor -> play movement.
+                    if active_alpha > 0:
+                        # Title above the mini active hand.
+                        h = rtxt(font_tiny, "HAND", GOLD, bold_px=1)
+                        h.set_alpha(max(0, min(255, active_alpha)))
+                        hand_group_w = mini_card_w * 2 + gap_small * 2
+                        hand_group_cx = (slot1_x2 + slot2_x2 + mini_card_w) // 2
+                        screen.blit(h, (hand_group_cx - h.get_width() // 2, slot_y2 - h.get_height() - 6))
+                        # Right card stays in place until the sequence fades away.
+                        _blit_alpha(card_face_a, slot2_x2, slot_y2, active_alpha)
+                        # Left card (clicked) moves toward question mark and fades out.
+                        if clicked_card_alpha > 0:
+                            # Mini grow-click effect during cursor click.
+                            pop_start = 4250
+                            pop_end = pop_start + 220
+                            pop_u = _clamp01((t2m - pop_start) / float(pop_end - pop_start)) if t2m >= pop_start else 0.0
+                            pop_scale = 1.0 + 0.15 * math.sin(math.pi * pop_u) if pop_u > 0 else 1.0
+                            rotated = pygame.transform.rotozoom(card_face_b, 0.0, pop_scale)
+                            rc = rotated.get_rect(
+                                center=(clicked_card_x + mini_card_w // 2, clicked_card_y + mini_card_h // 2)
+                            )
+                            _blit_alpha(rotated, rc.x, rc.y, clicked_card_alpha)
+
+                    if q_mini is not None and q_alpha > 0:
+                        _blit_alpha(q_mini, q_target_x, q_target_y, q_alpha)
+
+                        # Three dots: appear next to the question mark, one-by-one every 0.4s.
+                        dot_base = q_in_end + 100
+                        dot_interval = 400
+                        dot_fade = 250
+                        dot_size = 4
+                        dot_y = q_target_y + q_h // 2 - dot_size // 2
+                        dot_x0 = q_target_x + q_w + 6
+                        for di in range(3):
+                            ds = dot_base + di * dot_interval
+                            de = ds + dot_fade
+                            if t2m < ds:
+                                on = 0.0
+                            elif t2m < de:
+                                on = (t2m - ds) / float(dot_fade)
+                            else:
+                                on = 1.0
+                            if on <= 0.0:
+                                continue
+                            a = int(q_alpha * on)
+                            if a <= 0:
+                                continue
+                            dot_s = pygame.Surface((dot_size, dot_size), pygame.SRCALPHA)
+                            pygame.draw.circle(
+                                dot_s,
+                                (*RED, a),
+                                (dot_size // 2, dot_size // 2),
+                                dot_size // 2,
+                            )
+                            _blit_alpha(dot_s, dot_x0 + di * (dot_size + 3), dot_y, a)
+
+                    if cursor_mini is not None and cursor_alpha > 0:
+                        # Cursor click pop (sync with the card grow-click).
+                        pop_start = 4250
+                        pop_end = pop_start + 220
+                        pop_u = _clamp01((t2m - pop_start) / float(pop_end - pop_start)) if t2m >= pop_start else 0.0
+                        pop_scale = 1.0 + 0.10 * math.sin(math.pi * pop_u) if pop_u > 0 else 1.0
+                        cursor_draw = cursor_mini if pop_scale == 1.0 else pygame.transform.rotozoom(cursor_mini, 0.0, pop_scale)
+                        rc = cursor_draw.get_rect(center=(cursor_x + cursor_w // 2, cursor_y + cursor_h // 2))
+                        _blit_alpha(cursor_draw, rc.x, rc.y, cursor_alpha)
+
+        # Bottom-right prompt: always visible on intro screen.
+        start_tip = rtxt(font_small, "Click to start. ESC to quit.", GOLD)
+        screen.blit(start_tip, (LOW_W - start_tip.get_width() - 14, LOW_H - 30))
 
     def draw_menu() -> None:
         nonlocal menu_play_rect, menu_credits_rect, menu_settings_rect, menu_admin_rect
         draw_tiled_background()
         draw_pixel_border(screen, pygame.Rect(8, 8, LOW_W - 16, LOW_H - 16), FELT_DARK, GOLD)
+        menu_admin_rect = None  # hide by default unless dev-enabled
         # Title (placeholder; user will upload image later)
         title = rtxt(font_big, "ETHICAL STACK", GOLD)
         tx = (LOW_W - title.get_width()) // 2
@@ -1778,14 +2487,19 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         draw_pixel_border(screen, menu_settings_rect, FELT_DARK, GOLD)
         stxt = rtxt(font_small, "Settings", PAPER)
         screen.blit(stxt, (menu_settings_rect.centerx - stxt.get_width() // 2, menu_settings_rect.centery - stxt.get_height() // 2))
-        # Admin Phase 2 test button
-        admin_y = set_y + btn_h + 12
-        menu_admin_rect = pygame.Rect(cx - btn_w // 2, admin_y, btn_w, btn_h)
-        draw_pixel_border(screen, menu_admin_rect, GOLD, (80, 70, 40))
-        atxt = rtxt(font_small, "Admin Phase2", INK)
-        screen.blit(atxt, (menu_admin_rect.centerx - atxt.get_width() // 2, menu_admin_rect.centery - atxt.get_height() // 2))
-        esc = rtxt(font_small, "ESC to quit.", GOLD, bold_px=0)
+        esc = rtxt(font_small, "ESC to quit.", GOLD, bold_px=1)
         screen.blit(esc, (LOW_W - esc.get_width() - 20, LOW_H - 30))
+
+        if ADMIN_PHASE2_ENABLED:
+            # Admin Phase 2 test button (dev only)
+            admin_y = set_y + btn_h + 12
+            menu_admin_rect = pygame.Rect(cx - btn_w // 2, admin_y, btn_w, btn_h)
+            draw_pixel_border(screen, menu_admin_rect, GOLD, (80, 70, 40))
+            atxt = rtxt(font_small, "Admin Phase2", INK)
+            screen.blit(
+                atxt,
+                (menu_admin_rect.centerx - atxt.get_width() // 2, menu_admin_rect.centery - atxt.get_height() // 2),
+            )
 
     def draw_credits() -> None:
         """Credits: background and text/logos only, no borders or boxes."""
@@ -1951,7 +2665,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             draw_pixel_border(screen, game_over_menu_rect, FELT_DARK, GOLD)
             mtxt = rtxt(font_small, "Menu", PAPER)
             screen.blit(mtxt, (game_over_menu_rect.centerx - mtxt.get_width() // 2, game_over_menu_rect.centery - mtxt.get_height() // 2))
-        esc = rtxt(font_small, "ESC to quit", GOLD, bold_px=0)
+        esc = rtxt(font_small, "ESC to quit.", GOLD, bold_px=1)
         screen.blit(esc, ((LOW_W - esc.get_width()) // 2, LOW_H - 24))
 
     def draw_boss() -> None:
@@ -2116,6 +2830,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                         if contracts:
                             state.scenario_key = rng.choice([c["key"] for c in contracts])
                         mode = "intro"
+                        intro_start_ms = pygame.time.get_ticks()
                     elif menu_credits_rect and menu_credits_rect.collidepoint(mouse_low):
                         play_sfx("button")
                         mode = "credits"
@@ -2144,6 +2859,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                     recompute_stats_from_active(state)
                     message = "Click deck to draw & advance. Max 5 in hand. Active cards = your stats."
                     mode = "game"
+                    intro_start_ms = None
                     continue
                 if mode == "phase2":
                     if phase2_subphase == "play" and phase2_q_index < len(phase2_questions):
@@ -2216,7 +2932,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                         mode = "menu"
                         collect_anim_list.clear()
                         continue
-                    # Retry: immediately restart from Phase 1 (no menu detour).
+                    # Retry: show the intro again first (then the player starts from the intro).
                     state = State()
                     deck, discard, collected, hand = [], [], [], []
                     selected = []
@@ -2245,10 +2961,8 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                     contracts = get_contracts()
                     if contracts:
                         state.scenario_key = rng.choice([c["key"] for c in contracts])
-                    start_round()
-                    recompute_stats_from_active(state)
-                    message = "Click deck to draw & advance. Max 5 in hand. Active cards = your stats."
-                    mode = "game"
+                    intro_start_ms = pygame.time.get_ticks()
+                    mode = "intro"
                     collect_anim_list.clear()
                     continue
                 if mode == "over" and game_over_menu_rect and game_over_menu_rect.collidepoint(mouse_low):
