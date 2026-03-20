@@ -764,10 +764,35 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 return
             start_round()
             mode = "game"
+            try_insta_pass_if_contract_met()
         else:
             story_line = "Run complete."
             message = "Your choices outlive your dashboard."
             mode = "over"
+
+    def try_insta_pass_if_contract_met() -> None:
+        """Skip remaining phase-1 rounds once the active deck satisfies the scenario contract."""
+        nonlocal end_round_after_draw, deck_draw_in_progress, deck_draw_buffer, deck_anim_frames
+        nonlocal deck_draw_step_index, hidden_hand_index
+        if mode != "game":
+            return
+        if deck_draw_in_progress:
+            return
+        if hard_loss():
+            return
+        if state.round_idx >= 11 or state.round_idx > state.rounds_total:
+            return
+        if not contract_fulfilled(state, state.scenario_key):
+            return
+        if state.round_idx < 10:
+            state.round_idx = 10
+        end_round_after_draw = False
+        deck_draw_in_progress = False
+        deck_draw_buffer.clear()
+        deck_anim_frames = 0
+        deck_draw_step_index = 0
+        hidden_hand_index = None
+        end_round()
 
     def suit_color(suit: str) -> Tuple[int, int, int]:
         return RED if suit in ("heart", "diamond") else BLUE
@@ -2932,6 +2957,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                     recompute_stats_from_active(state)
                     message = "Click deck to draw & advance. Max 5 in hand. Active cards = your stats."
                     mode = "game"
+                    try_insta_pass_if_contract_met()
                     intro_start_ms = None
                     continue
                 if mode == "phase2":
@@ -3133,6 +3159,8 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                                     hidden_hand_index -= 1
                                 on_card_trashed(state, card)
                                 hand.pop(dragging_hand_idx)
+                                recompute_stats_from_active(state)
+                                try_insta_pass_if_contract_met()
                             else:
                                 slot_rects = active_slot_rects()
                                 dropped_on_active = False
@@ -3181,6 +3209,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                                                     play_equip_sfx(card)
                                                     on_card_added_to_active(state, first_empty, card)
                                                     recompute_stats_from_active(state)
+                                                    try_insta_pass_if_contract_met()
                                                     dropped_on_active = True
                                                 break
                                 if not dropped_on_active and conflict_slot is None:
@@ -3215,6 +3244,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                                                 play_equip_sfx(card)
                                                 on_card_added_to_active(state, first_empty, card)
                                                 recompute_stats_from_active(state)
+                                                try_insta_pass_if_contract_met()
                         dragging_hand_idx = None
                     elif dragging_active_idx is not None:
                         if dragging_active_idx < len(state.active_slots) and state.active_slots[dragging_active_idx]:
@@ -3226,17 +3256,20 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                                 state.active_slots[dragging_active_idx] = None
                                 on_card_removed_from_active(state, dragging_active_idx, card)
                                 recompute_stats_from_active(state)
+                                try_insta_pass_if_contract_met()
                             elif trash_rect.collidepoint(mouse_low):
                                 play_sfx("bin")
                                 state.active_slots[dragging_active_idx] = None
                                 on_card_removed_from_active(state, dragging_active_idx, card)
                                 on_card_trashed(state, card)
                                 recompute_stats_from_active(state)
+                                try_insta_pass_if_contract_met()
                             elif same_slot and len(hand) < hand_limit:
                                 # Click (no drag) on active card: return to hand with animation
                                 state.active_slots[dragging_active_idx] = None
                                 on_card_removed_from_active(state, dragging_active_idx, card)
                                 recompute_stats_from_active(state)
+                                try_insta_pass_if_contract_met()
                                 start_r = slot_rects[dragging_active_idx].copy()
                                 play_sfx("woosh")
                                 active_to_hand_anim_list.append((card, start_r, 0.0, dragging_active_idx))
