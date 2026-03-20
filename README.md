@@ -1,4 +1,4 @@
-# Ethical Stack - Pixel UI
+# Ethical Stack
 
 A singleplayer card game about **ethical AI tradeoffs**, inspired by the digital card game Balatro:
 you draw cards, assemble an **ACTIVE** deck, and your stats determine whether deployment is approved.
