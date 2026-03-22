@@ -349,6 +349,18 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             except Exception:
                 cursor_raw = None
 
+    # Full-UI cursor (logical / low-res coords); intro uses its own mini scaled copy.
+    ui_cursor_surf: Optional[pygame.Surface] = None
+    if cursor_raw is not None:
+        _cuw = 30
+        _iw = max(1, cursor_raw.get_width())
+        _cuh = max(1, int(_cuw * (cursor_raw.get_height() / float(_iw))))
+        ui_cursor_surf = pygame.transform.smoothscale(cursor_raw, (_cuw, _cuh))
+    if ui_cursor_surf is not None and not headless:
+        pygame.mouse.set_visible(False)
+    else:
+        pygame.mouse.set_visible(True)
+
     question_mark_raw: Optional[pygame.Surface] = None
     _q_paths = [
         os.path.join(_src_dir, "question_mark.webp"),
@@ -2898,10 +2910,12 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
     clock = pygame.time.Clock()
     running = True
     headless_frames = 0
+    # Idle until first click (no bob). Intro deck click uses 600ms; UI click is faster.
+    CURSOR_CLICK_ANIM_MS = 360.0
+    cursor_click_elapsed_ms = 1e9
     while running:
         frame += 1
         dt = clock.tick(60)
-        _ = dt  # reserved for later animations
 
         mx, my = pygame.mouse.get_pos()
         lmx, lmy = mx // SCALE, my // SCALE
@@ -2914,6 +2928,8 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 running = False
 
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if ui_cursor_surf is not None and not headless:
+                    cursor_click_elapsed_ms = 0.0
                 if mode == "menu":
                     if menu_play_rect and menu_play_rect.collidepoint(mouse_low):
                         play_sfx("button")
@@ -3390,6 +3406,13 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                     screen.blit(pip, (dr.x + 4, dr.y + 3))
                 draw_pixel_frame(screen, dr, outer, PAPER_DARK)
                 blit_cursed_horns_on_screen(screen, c, dr)
+        if ui_cursor_surf is not None and not headless:
+            bob_y = 0
+            if cursor_click_elapsed_ms < CURSOR_CLICK_ANIM_MS:
+                _cu = cursor_click_elapsed_ms / CURSOR_CLICK_ANIM_MS
+                # Same triangle bob as intro deck click (down then up); intro uses 600ms here we use 360ms.
+                bob_y = int(8 * (1.0 - abs(2.0 * _cu - 1.0)))
+            screen.blit(ui_cursor_surf, (lmx - 20, lmy + bob_y - 5))
         pygame.transform.scale(screen, (W, H), window)
         pygame.display.flip()
 
@@ -3525,6 +3548,8 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 phase2_subphase = ""
                 phase2_win_burst.clear()
                 mode = "over"
+
+        cursor_click_elapsed_ms += float(dt)
 
         if headless:
             headless_frames += 1
