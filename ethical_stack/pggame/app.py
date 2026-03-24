@@ -30,6 +30,7 @@ from ethical_stack.pggame.content import (
     on_card_removed_from_active,
     on_card_trashed,
     recompute_stats_from_active,
+    is_regularization_active,
 )
 from ethical_stack.pggame.model import Card, State, Stat
 
@@ -43,6 +44,8 @@ W, H = int(LOW_W * SCALE), int(LOW_H * SCALE)
 FELT = (20, 110, 60)
 FELT_DARK = (15, 85, 45)
 GOLD = (235, 205, 120)
+# Cursed cards while Regularization is active: frame / rarity label / debuff readout (distinct from table GOLD).
+REGULARIZED_CURSE_GOLD = (218, 168, 68)
 INK = (20, 18, 20)
 PAPER = (240, 236, 228)
 PAPER_DARK = (214, 208, 196)
@@ -64,6 +67,11 @@ EPIC_GODRAY_ALPHA_PERIOD_S = 8.0
 # Cursed: single centered horns image, nudged up from the card top.
 CURSED_HORN_TOP_INSET = 5
 CURSED_HORN_RAISE_PX = 29
+# Cursed + Regularization: wings.png behind the card (like epic godrays). Tune placement/size here.
+CURSED_WINGS_VS_HORNS_EXTRA_DOWN_PX = 35  # wings vs horns anchor (~px lower on screen)
+CURSED_WINGS_OFFSET_X_PX = 0  # extra horizontal nudge (+ = right)
+CURSED_WINGS_OFFSET_Y_PX = 0  # extra vertical nudge (+ = down)
+CURSED_WINGS_SCALE = 2.15  # multiply wing sprite size after same base fit as horns (1.0 = match)
 
 
 @dataclass
@@ -323,7 +331,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         if r == "epic":
             return EPIC_PURPLE
         if r == "cursed":
-            return RED
+            return REGULARIZED_CURSE_GOLD if is_regularization_active(state) else RED
         return card_border_color(c)
 
     # Cursed: one horns.png (both horns), centered on top. Epic: godray layer (helpers below).
@@ -334,6 +342,13 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             horns_raw = pygame.image.load(_horns_path).convert_alpha()
         except Exception:
             horns_raw = None
+    wings_raw: Optional[pygame.Surface] = None
+    _wings_path = os.path.join(_src_dir, "wings.png")
+    if os.path.isfile(_wings_path):
+        try:
+            wings_raw = pygame.image.load(_wings_path).convert_alpha()
+        except Exception:
+            wings_raw = None
     # Intro tutorial overlays.
     cursor_raw: Optional[pygame.Surface] = None
     _cursor_paths = [
@@ -381,14 +396,15 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
     _intro_demo_card_key_1: Optional[str] = _intro_demo_art_keys[0] if _intro_demo_art_keys else None
     _intro_demo_card_key_2: Optional[str] = _intro_demo_art_keys[1] if len(_intro_demo_art_keys) > 1 else _intro_demo_card_key_1
     _horn_sprite_cache: Dict[Tuple[int, int], pygame.Surface] = {}
+    _wing_sprite_cache: Dict[Tuple[int, int], pygame.Surface] = {}
     _epic_ray_base_cache: Dict[Tuple[str, int], pygame.Surface] = {}
 
     def _epic_halo_pad(card: Card) -> int:
         return EPIC_GODRAY_HALO_PAD if _normalize_card_rarity(card) == "epic" else 0
 
-    def _padded_face_wh(card: Card, w: int, h: int) -> Tuple[int, int, int]:
+    def _padded_face_wh(card: Card, w: int, h: int, *, include_epic_halo_pad: bool = True) -> Tuple[int, int, int]:
         """Composite surface size (pw, ph) and offset pad so face stays w×h at (pad, pad)."""
-        pad = _epic_halo_pad(card)
+        pad = _epic_halo_pad(card) if include_epic_halo_pad else 0
         return w + 2 * pad, h + 2 * pad, pad
 
     def blit_epic_godrays_behind_card_layer(dest: pygame.Surface, card: Card, rect: pygame.Rect) -> None:
@@ -421,6 +437,70 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         scaled = pygame.transform.scale(horns_raw, (tw, th))
         _horn_sprite_cache[key] = scaled
         return scaled
+
+    def _wing_sprite_for_card(card_w: int, card_h: int) -> Optional[pygame.Surface]:
+        if wings_raw is None:
+            return None
+        max_w = max(14, card_w - 8)
+        th = max(14, min(56, int(card_h * 0.3)))
+        iw, ih = wings_raw.get_width(), wings_raw.get_height()
+        if ih <= 0:
+            return None
+        tw = max(1, int(iw * (th / float(ih))))
+        if tw > max_w:
+            th = max(1, int(ih * (max_w / float(iw))))
+            tw = max_w
+        tw = max(1, int(tw * CURSED_WINGS_SCALE))
+        th = max(1, int(th * CURSED_WINGS_SCALE))
+        key = (tw, th)
+        hit = _wing_sprite_cache.get(key)
+        if hit is not None:
+            return hit
+        scaled = pygame.transform.smoothscale(wings_raw, (tw, th))
+        _wing_sprite_cache[key] = scaled
+        return scaled
+
+    def _cursed_reg_wings_eligible(card: Card) -> bool:
+        return (
+            _normalize_card_rarity(card) == "cursed"
+            and is_regularization_active(state)
+            and wings_raw is not None
+        )
+
+    def blit_cursed_wings_behind_card_layer(dest: pygame.Surface, card: Card, rect: pygame.Rect) -> None:
+        """Draw wings under the card face (call before art / epic godrays layer)."""
+        if not _cursed_reg_wings_eligible(card):
+            return
+        spr = _wing_sprite_for_card(rect.w, rect.h)
+        if spr is None:
+            return
+        hy = (
+            rect.y
+            + CURSED_HORN_TOP_INSET
+            - CURSED_HORN_RAISE_PX
+            + CURSED_WINGS_VS_HORNS_EXTRA_DOWN_PX
+            + CURSED_WINGS_OFFSET_Y_PX
+        )
+        hx = rect.centerx - spr.get_width() // 2 + CURSED_WINGS_OFFSET_X_PX
+        dest.blit(spr, (hx, hy))
+
+    def draw_cursed_wings_behind_on_card_surface(
+        surf: pygame.Surface, card: Card, w: int, h: int, *, ox: int = 0, oy: int = 0
+    ) -> None:
+        if not _cursed_reg_wings_eligible(card):
+            return
+        spr = _wing_sprite_for_card(w, h)
+        if spr is None:
+            return
+        hy = (
+            oy
+            + CURSED_HORN_TOP_INSET
+            - CURSED_HORN_RAISE_PX
+            + CURSED_WINGS_VS_HORNS_EXTRA_DOWN_PX
+            + CURSED_WINGS_OFFSET_Y_PX
+        )
+        hx = ox + w // 2 - spr.get_width() // 2 + CURSED_WINGS_OFFSET_X_PX
+        surf.blit(spr, (hx, hy))
 
     def _epic_sheet_size(cw: int, ch: int) -> int:
         """Large fan inside the (possibly halo-padded) drawable area."""
@@ -488,6 +568,8 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
     def blit_cursed_horns_on_screen(dest: pygame.Surface, card: Card, rect: pygame.Rect) -> None:
         if _normalize_card_rarity(card) != "cursed":
             return
+        if is_regularization_active(state):
+            return
         spr = _horn_sprite_for_card(rect.w, rect.h)
         if spr is None:
             return
@@ -499,6 +581,8 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         surf: pygame.Surface, card: Card, w: int, h: int, *, ox: int = 0, oy: int = 0
     ) -> None:
         if _normalize_card_rarity(card) != "cursed":
+            return
+        if is_regularization_active(state):
             return
         spr = _horn_sprite_for_card(w, h)
         if spr is None:
@@ -537,7 +621,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
     DECK_DRAW_STEP_FRAMES = 18  # frames per "add one card" animation step
     # Black box model: one hand card is shown as card back until next draw.
     hidden_hand_index: Optional[int] = None
-    # Explainable documentation: hover over next-card preview shows this card in hover panel.
+    # Explainable documentation: hover over a peek preview shows that card in the hover panel.
     hover_peek_card: Optional[Card] = None
 
     # Collect animation: played cards fly to the collection pile (like deck draw arch).
@@ -845,6 +929,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 aw, ah = ACTIVE_CARD_W, ACTIVE_CARD_H
                 pw, ph, pp = _padded_face_wh(card, aw, ah)
                 card_surf = pygame.Surface((pw, ph), pygame.SRCALPHA)
+                draw_cursed_wings_behind_on_card_surface(card_surf, card, aw, ah, ox=pp, oy=pp)
                 has_art = card.art and card.art in card_art_surfs
                 draw_epic_rays_on_card_surface(card_surf, card, pw, ph)
                 if has_art:
@@ -1085,6 +1170,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 if fade_alpha > 0:
                     pw, ph, pp = _padded_face_wh(card, r.w, r.h)
                     card_surf = pygame.Surface((pw, ph), pygame.SRCALPHA)
+                    draw_cursed_wings_behind_on_card_surface(card_surf, card, r.w, r.h, ox=pp, oy=pp)
                     draw_epic_rays_on_card_surface(card_surf, card, pw, ph)
 
                     has_art = card.art and card.art in card_art_surfs
@@ -1110,6 +1196,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 wobble_scale = 1.03
                 p2w, p2h, p2p = _padded_face_wh(card, r.w, r.h)
                 card_surf = pygame.Surface((p2w, p2h), pygame.SRCALPHA)
+                draw_cursed_wings_behind_on_card_surface(card_surf, card, r.w, r.h, ox=p2p, oy=p2p)
                 draw_epic_rays_on_card_surface(card_surf, card, p2w, p2h)
                 if card.art and card.art in card_art_surfs:
                     art_surf = _phase2_get_scaled_art(card.art, r.w, r.h)
@@ -1124,6 +1211,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 rotated = pygame.transform.rotozoom(card_surf, angle, wobble_scale)
                 screen.blit(rotated, rotated.get_rect(center=(r.centerx, r.centery + lift_y)))
             else:
+                blit_cursed_wings_behind_card_layer(screen, card, r)
                 blit_epic_godrays_behind_card_layer(screen, card, r)
                 if card.art and card.art in card_art_surfs:
                     art_surf = _phase2_get_scaled_art(card.art, r.w, r.h)
@@ -1161,6 +1249,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             # Render the card into a surface once per frame (small N so it's fine).
             tw, th, tp = _padded_face_wh(card, start_r.w, start_r.h)
             base = pygame.Surface((tw, th), pygame.SRCALPHA)
+            draw_cursed_wings_behind_on_card_surface(base, card, start_r.w, start_r.h, ox=tp, oy=tp)
             draw_epic_rays_on_card_surface(base, card, tw, th)
             if card.art and card.art in card_art_surfs:
                 art_surf = _phase2_get_scaled_art(card.art, start_r.w, start_r.h)
@@ -1287,6 +1376,8 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         rarity = str(getattr(c, "rarity", "common")).lower()
         rarity_str = rarity.upper()
         rarity_color = {"common": pos_c, "rare": BLUE, "epic": EPIC_PURPLE, "cursed": RED}.get(rarity, neutral_c)
+        if rarity == "cursed" and is_regularization_active(state):
+            rarity_color = REGULARIZED_CURSE_GOLD
 
         # Line 1: card name (white) · rarity (colored), no black fill
         name_surf = rtxt(font_tiny, c.name, PAPER, bold_px=0)
@@ -1303,50 +1394,56 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         y += line_step
 
         # Line 2: full stat names in hover only (e.g. -1 Stability, +2 Automation)
-        if getattr(c, "key", None) == "carbon_footprint":
-            # Custom formatting requested for this specific card.
-            integ_v = int((c.effects or {}).get("integrity", 0))
-            token1 = f"{integ_v:+d} Integrity" if integ_v != 0 else "Integrity"
-            t1 = rtxt(font_tiny, token1, neg_c if integ_v < 0 else pos_c, bold_px=0)
-            t1.set_colorkey((0, 0, 0))
-            screen.blit(t1, (x, y))
-            cx = x + t1.get_width()
-            space = rtxt(font_tiny, " ", neutral_c, bold_px=0)
-            space.set_colorkey((0, 0, 0))
-            screen.blit(space, (cx, y))
-            cx += space.get_width()
-            t2 = rtxt(font_tiny, "+1 Active Slot", pos_c, bold_px=0)
-            t2.set_colorkey((0, 0, 0))
-            screen.blit(t2, (cx, y))
-            y += line_step
-        else:
-            active = get_active_stats(state.round_idx)
-            full_names = {
-                "transparency": "Transparency",
-                "stability": "Stability",
-                "automation": "Automation",
-                "generalizability": "Generalizability",
-                "integrity": "Integrity",
-            }
-            tokens: List[Tuple[str, Tuple[int, int, int]]] = []
-            for key in active:
-                v = int(c.effects.get(key, 0))
-                if v:
-                    name = full_names.get(key, key.replace("_", " ").title())
+        active = get_active_stats(state.round_idx)
+        full_names = {
+            "transparency": "Transparency",
+            "stability": "Stability",
+            "automation": "Automation",
+            "generalizability": "Generalizability",
+            "integrity": "Integrity",
+        }
+        tokens: List[Tuple[str, Tuple[int, int, int]]] = []
+        eff = c.effects or {}
+        reg_active = is_regularization_active(state)
+        for key in active:
+            v = int(eff.get(key, 0))
+            if v:
+                name = full_names.get(key, key.replace("_", " ").title())
+                if reg_active and v < 0:
+                    tokens.append((f"{-v:+d} {name}", REGULARIZED_CURSE_GOLD))
+                else:
                     tokens.append((f"{v:+d} {name}", pos_c if v > 0 else neg_c))
-            if tokens:
-                cx = x
-                for i, (tok, col) in enumerate(tokens):
-                    if i > 0:
-                        comma = rtxt(font_tiny, ", ", neutral_c, bold_px=0)
-                        comma.set_colorkey((0, 0, 0))
-                        screen.blit(comma, (cx, y))
-                        cx += comma.get_width()
-                    surf = rtxt(font_tiny, tok, col, bold_px=0)
-                    surf.set_colorkey((0, 0, 0))
-                    screen.blit(surf, (cx, y))
-                    cx += surf.get_width()
-                y += line_step
+        if getattr(c, "key", None) == "carbon_footprint" and (c.passive or {}).get("type") == "extra_slot":
+            tokens.append(("+1 Active Slot", pos_c))
+        if tokens:
+            cx = x
+            for i, (tok, col) in enumerate(tokens):
+                if i > 0:
+                    comma = rtxt(font_tiny, ", ", neutral_c, bold_px=0)
+                    comma.set_colorkey((0, 0, 0))
+                    screen.blit(comma, (cx, y))
+                    cx += comma.get_width()
+                surf = rtxt(font_tiny, tok, col, bold_px=0)
+                surf.set_colorkey((0, 0, 0))
+                screen.blit(surf, (cx, y))
+                cx += surf.get_width()
+            y += line_step
+
+        if getattr(c, "key", None) == "feature_engineering":
+            bind = state.feature_engineering_stat_by_card_id.get(id(c))
+            if bind is not None:
+                letter = {"transparency": "T", "stability": "S", "automation": "A", "generalizability": "G", "integrity": "I"}.get(
+                    bind, "?"
+                )
+                fe_lines = wrap_text(
+                    f"Binds {letter}: doubles that stat by adding its total again (value before Feature Engineering).",
+                    max_w,
+                )
+                for line in fe_lines:
+                    hl = rtxt(font_tiny, line, GOLD, bold_px=0)
+                    hl.set_colorkey((0, 0, 0))
+                    screen.blit(hl, (x, y))
+                    y += line_step
 
         # Line 3: card text (setting/gameplay hint). Show for every card, not only passives.
         if getattr(c, "key", None) == "carbon_footprint":
@@ -1399,6 +1496,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                         ha = c.art and c.art in card_art_surfs
                         pw, ph, pp = _padded_face_wh(c, r.w, r.h)
                         card_surf = pygame.Surface((pw, ph), pygame.SRCALPHA)
+                        draw_cursed_wings_behind_on_card_surface(card_surf, c, r.w, r.h, ox=pp, oy=pp)
                         draw_epic_rays_on_card_surface(card_surf, c, pw, ph)
                         if ha:
                             sc = pygame.transform.smoothscale(card_art_surfs[c.art], (r.w, r.h))
@@ -1415,6 +1513,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                         screen.blit(rotated, rotated.get_rect(center=r.center))
                     else:
                         ha = c.art and c.art in card_art_surfs
+                        blit_cursed_wings_behind_card_layer(screen, c, r)
                         blit_epic_godrays_behind_card_layer(screen, c, r)
                         if ha:
                             sc = pygame.transform.smoothscale(card_art_surfs[c.art], (r.w, r.h))
@@ -1456,6 +1555,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                     ha = c.art and c.art in card_art_surfs
                     pw, ph, pp = _padded_face_wh(c, w, h)
                     card_surf = pygame.Surface((pw, ph), pygame.SRCALPHA)
+                    draw_cursed_wings_behind_on_card_surface(card_surf, c, w, h, ox=pp, oy=pp)
                     draw_epic_rays_on_card_surface(card_surf, c, pw, ph)
                     if ha:
                         sc = pygame.transform.smoothscale(card_art_surfs[c.art], (w, h))
@@ -1472,6 +1572,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                     screen.blit(rotated, rotated.get_rect(center=r.center))
                 else:
                     ha = c.art and c.art in card_art_surfs
+                    blit_cursed_wings_behind_card_layer(screen, c, r)
                     blit_epic_godrays_behind_card_layer(screen, c, r)
                     if ha:
                         sc = pygame.transform.smoothscale(card_art_surfs[c.art], (r.w, r.h))
@@ -1515,6 +1616,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 ha = c.art and c.art in card_art_surfs
                 pw, ph, pp = _padded_face_wh(c, r.w, r.h)
                 card_surf = pygame.Surface((pw, ph), pygame.SRCALPHA)
+                draw_cursed_wings_behind_on_card_surface(card_surf, c, r.w, r.h, ox=pp, oy=pp)
                 draw_epic_rays_on_card_surface(card_surf, c, pw, ph)
                 if ha:
                     sc = pygame.transform.smoothscale(card_art_surfs[c.art], (r.w, r.h))
@@ -1531,6 +1633,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 screen.blit(rotated, rotated.get_rect(center=r.center))
             else:
                 ha = c.art and c.art in card_art_surfs
+                blit_cursed_wings_behind_card_layer(screen, c, r)
                 blit_epic_godrays_behind_card_layer(screen, c, r)
                 if ha:
                     sc = pygame.transform.smoothscale(card_art_surfs[c.art], (r.w, r.h))
@@ -1555,6 +1658,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             anim_r.center = (xc, yc)
             outer = card_frame_outer_color(card)
             ha = card.art and card.art in card_art_surfs
+            blit_cursed_wings_behind_card_layer(screen, card, anim_r)
             blit_epic_godrays_behind_card_layer(screen, card, anim_r)
             if ha:
                 sc = pygame.transform.smoothscale(card_art_surfs[card.art], (anim_r.w, anim_r.h))
@@ -1579,6 +1683,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             anim_r.center = (xc, yc)
             outer = card_frame_outer_color(card)
             ha = card.art and card.art in card_art_surfs
+            blit_cursed_wings_behind_card_layer(screen, card, anim_r)
             blit_epic_godrays_behind_card_layer(screen, card, anim_r)
             if ha:
                 sc = pygame.transform.smoothscale(card_art_surfs[card.art], (anim_r.w, anim_r.h))
@@ -1699,31 +1804,40 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 else:
                     draw_pixel_border(screen, r, PAPER_DARK, GOLD)
 
-            # Explainable documentation: preview next card above deck (half transparent, phasing 50–70 alpha)
+            # Explainable documentation: next 3 draws above deck (left = soonest); half transparent, phasing 50–70 alpha.
+            EXPLAINABLE_PEEK_N = 3
+            EXPLAINABLE_PEEK_SCALE = 0.5
+            EXPLAINABLE_PEEK_GAP = 4
             has_explainable = any(c and c.key == "explainable_documentation" for c in state.active_slots)
             if has_explainable and deck and not deck_draw_in_progress:
-                peek_card = deck[-1]
-                pkw, pkh, pkp = _padded_face_wh(peek_card, ACTIVE_CARD_W, ACTIVE_CARD_H)
-                peek_rect = pygame.Rect(deck_rect.centerx - pkw // 2, deck_rect.y - pkh - 8, pkw, pkh)
+                n_peek = min(EXPLAINABLE_PEEK_N, len(deck))
+                peek_cards_draw = [deck[-1 - i] for i in range(n_peek)]
+                sw, sh = int(ACTIVE_CARD_W * EXPLAINABLE_PEEK_SCALE), int(ACTIVE_CARD_H * EXPLAINABLE_PEEK_SCALE)
+                pk_dims = [_padded_face_wh(pc, sw, sh, include_epic_halo_pad=False) for pc in peek_cards_draw]
+                total_pw = sum(d[0] for d in pk_dims) + EXPLAINABLE_PEEK_GAP * max(0, n_peek - 1)
+                acc_x = deck_rect.centerx - total_pw // 2
+                y_peek = deck_rect.y - max(d[1] for d in pk_dims) - 8
                 phase = 0.5 + 0.5 * math.sin(frame * 0.08)
                 alpha = int(50 + 20 * phase)
-                peek_surf = pygame.Surface((pkw, pkh), pygame.SRCALPHA)
-                peek_outer = card_frame_outer_color(peek_card)
-                pha = peek_card.art and peek_card.art in card_art_surfs
-                draw_epic_rays_on_card_surface(peek_surf, peek_card, pkw, pkh)
-                if pha:
-                    scaled = pygame.transform.smoothscale(card_art_surfs[peek_card.art], (ACTIVE_CARD_W, ACTIVE_CARD_H))
-                    peek_surf.blit(scaled, (pkp, pkp))
-                else:
-                    peek_surf.fill((240, 236, 228, 255), rect=pygame.Rect(pkp, pkp, ACTIVE_CARD_W, ACTIVE_CARD_H))
-                    draw_pixel_border(peek_surf, pygame.Rect(pkp, pkp, ACTIVE_CARD_W, ACTIVE_CARD_H), (250, 248, 240), peek_outer)
-                if not pha:
-                    pip = rtxt(font_tiny, peek_card.suit[0].upper(), card_border_color(peek_card), bold_px=0)
-                    peek_surf.blit(pip, (pkp + 2, pkp + 2))
-                draw_pixel_frame(peek_surf, pygame.Rect(pkp, pkp, ACTIVE_CARD_W, ACTIVE_CARD_H), peek_outer, PAPER_DARK)
-                draw_cursed_horns_on_card_surface(peek_surf, peek_card, ACTIVE_CARD_W, ACTIVE_CARD_H, ox=pkp, oy=pkp)
-                peek_surf.set_alpha(alpha)
-                screen.blit(peek_surf, peek_rect)
+                for peek_card, (pkw, pkh, pkp) in zip(peek_cards_draw, pk_dims):
+                    peek_rect = pygame.Rect(acc_x, y_peek, pkw, pkh)
+                    peek_surf = pygame.Surface((pkw, pkh), pygame.SRCALPHA)
+                    # Previews: plain frame only (no epic godrays / cursed horns / rarity-colored border).
+                    peek_outer = GOLD
+                    pha = peek_card.art and peek_card.art in card_art_surfs
+                    if pha:
+                        scaled = pygame.transform.smoothscale(card_art_surfs[peek_card.art], (sw, sh))
+                        peek_surf.blit(scaled, (pkp, pkp))
+                    else:
+                        peek_surf.fill((240, 236, 228, 255), rect=pygame.Rect(pkp, pkp, sw, sh))
+                        draw_pixel_border(peek_surf, pygame.Rect(pkp, pkp, sw, sh), (250, 248, 240), peek_outer)
+                    if not pha:
+                        pip = rtxt(font_tiny, peek_card.suit[0].upper(), card_border_color(peek_card), bold_px=0)
+                        peek_surf.blit(pip, (pkp + 2, pkp + 2))
+                    draw_pixel_frame(peek_surf, pygame.Rect(pkp, pkp, sw, sh), peek_outer, PAPER_DARK)
+                    peek_surf.set_alpha(alpha)
+                    screen.blit(peek_surf, peek_rect)
+                    acc_x += pkw + EXPLAINABLE_PEEK_GAP
 
             # Red warning: flash red mask + single-line compact text above deck
             if deck_warning_frames > 0:
@@ -3264,12 +3378,25 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                     break
         elif mode == "game" and dragging_hand_idx is None and dragging_active_idx is None:
             if not deck_draw_in_progress:
-                # Explainable documentation: next-card preview above deck
+                # Explainable documentation: 3-card preview above deck (same layout as draw_cards).
                 has_explainable = any(c and c.key == "explainable_documentation" for c in state.active_slots)
                 if has_explainable and deck:
-                    peek_rect = pygame.Rect(deck_rect.centerx - ACTIVE_CARD_W // 2, deck_rect.y - ACTIVE_CARD_H - 8, ACTIVE_CARD_W, ACTIVE_CARD_H)
-                    if peek_rect.collidepoint(mouse_low):
-                        hover_peek_card = deck[-1]
+                    EXPLAINABLE_PEEK_N = 3
+                    EXPLAINABLE_PEEK_SCALE = 0.5
+                    EXPLAINABLE_PEEK_GAP = 4
+                    n_peek = min(EXPLAINABLE_PEEK_N, len(deck))
+                    peek_cards_hit = [deck[-1 - i] for i in range(n_peek)]
+                    sw, sh = int(ACTIVE_CARD_W * EXPLAINABLE_PEEK_SCALE), int(ACTIVE_CARD_H * EXPLAINABLE_PEEK_SCALE)
+                    pk_dims = [_padded_face_wh(pc, sw, sh, include_epic_halo_pad=False) for pc in peek_cards_hit]
+                    total_pw = sum(d[0] for d in pk_dims) + EXPLAINABLE_PEEK_GAP * max(0, n_peek - 1)
+                    acc_x = deck_rect.centerx - total_pw // 2
+                    y_peek = deck_rect.y - max(d[1] for d in pk_dims) - 8
+                    for peek_c, (pkw, pkh, _pkp) in zip(peek_cards_hit, pk_dims):
+                        hit_r = pygame.Rect(acc_x, y_peek, pkw, pkh)
+                        if hit_r.collidepoint(mouse_low):
+                            hover_peek_card = peek_c
+                            break
+                        acc_x += pkw + EXPLAINABLE_PEEK_GAP
                 if hover_peek_card is None:
                     slot_rects = active_slot_rects()
                     for i, r in enumerate(slot_rects):
@@ -3292,6 +3419,8 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 hover_token = f"a:{hover_active_idx}"
             elif hover_idx is not None:
                 hover_token = f"h:{hover_idx}"
+            elif hover_peek_card is not None:
+                hover_token = f"peek:{hover_peek_card.key}"
             elif deck_rect.collidepoint(mouse_low):
                 hover_token = "deck"
         if hover_token != last_hover_token:
@@ -3328,6 +3457,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 else:
                     outer = card_frame_outer_color(c)
                     dha = c.art and c.art in card_art_surfs
+                    blit_cursed_wings_behind_card_layer(screen, c, dr)
                     blit_epic_godrays_behind_card_layer(screen, c, dr)
                     if dha:
                         sc = pygame.transform.smoothscale(card_art_surfs[c.art], (dr.w, dr.h))
@@ -3343,6 +3473,7 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
                 dr = pygame.Rect(lmx - CARD_W // 2, lmy - CARD_H // 2, CARD_W, CARD_H)
                 outer = card_frame_outer_color(c)
                 dha = c.art and c.art in card_art_surfs
+                blit_cursed_wings_behind_card_layer(screen, c, dr)
                 blit_epic_godrays_behind_card_layer(screen, c, dr)
                 if dha:
                     sc = pygame.transform.smoothscale(card_art_surfs[c.art], (dr.w, dr.h))

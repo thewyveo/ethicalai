@@ -37,9 +37,10 @@ class State:
     realtime_api_bonus: int = 0
     batch_processing_bonus: int = 0
     human_in_loop_boost: Dict[int, Optional[Stat]] = field(default_factory=dict)  # slot_idx -> stat that gets +5
-    fine_tune_floors: Dict[Stat, int] = field(default_factory=dict)  # stat -> floor (can't go below)
-    # Feature engineering: slot index whose card's stat effects are doubled (persists when card moved out)
-    feature_engineering_doubled_slot: Optional[int] = None
+    # Stats that tied for highest when Fine-Tuning was added to active; each gets +amount on recompute.
+    fine_tune_boost_stats: List[Stat] = field(default_factory=list)
+    # Feature engineering: id(card) -> bound stat; recompute adds that stat's snapshot (pre-FE doubling) once per instance
+    feature_engineering_stat_by_card_id: Dict[int, Stat] = field(default_factory=dict)
 
     def apply(self, effects: Dict[Stat, int]) -> None:
         for stat, delta in effects.items():

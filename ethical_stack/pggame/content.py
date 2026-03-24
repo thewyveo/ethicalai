@@ -17,27 +17,27 @@ def get_contracts() -> List[Dict[str, Any]]:
         {
             "key": "healthcare",
             "name": "Healthcare AI",
-            "requirements": {"transparency": 8, "stability": 6, "integrity": 7, "generalizability": 5, "automation": 2},
+            "requirements": {"transparency": 9, "stability": 6, "integrity": 7, "generalizability": 5, "automation": 2},
         },
         {
             "key": "startup",
             "name": "Startup AI",
-            "requirements": {"automation": 5, "stability": 5, "transparency": 4, "generalizability": 7, "integrity": 4},
+            "requirements": {"automation": 5, "stability": 5, "transparency": 4, "generalizability": 8, "integrity": 4},
         },
         {
             "key": "government",
             "name": "Government AI",
-            "requirements": {"transparency": 6, "integrity": 6, "stability": 5, "generalizability": 3, "automation": 4},
+            "requirements": {"transparency": 6, "integrity": 6, "stability": 6, "generalizability": 3, "automation": 4},
         },
         {
             "key": "social_media",
             "name": "Social Media Algorithm",
-            "requirements": {"automation": 7, "integrity": 4, "generalizability": 2, "transparency": 3, "stability": 5},
+            "requirements": {"automation": 9, "integrity": 5, "generalizability": 1, "transparency": 2, "stability": 5},
         },
         {
             "key": "defense",
             "name": "Defensive / Military AI",
-            "requirements": {"automation": 10, "stability": 8, "integrity": 2, "transparency": 2, "generalizability": 2},
+            "requirements": {"automation": 10, "stability": 9, "integrity": 2, "transparency": 1, "generalizability": 2},
         },
     ]
 
@@ -122,6 +122,10 @@ def _has_active_card_by_key(state: State, key: str) -> bool:
     return False
 
 
+def is_regularization_active(state: State) -> bool:
+    return _has_active_card_by_key(state, "regularization")
+
+
 def _card(
     key: str,
     name: str,
@@ -138,36 +142,36 @@ def _card(
 # Card definitions: key -> name, text, effects, passive. Suit/rarity/art come from cards.txt.
 def _card_definitions() -> Dict[str, Dict[str, Any]]:
     return {
-        "human_oversight": {"name": "Human Oversight", "text": "A person can say no. Reduces automation, increases transparency.", "effects": {"automation": -1, "transparency": 1}, "passive": None},
+        "human_oversight": {"name": "Human Oversight", "text": "A person can say no. Reduces automation, increases transparency.", "effects": {"automation": -1, "transparency": 2}, "passive": None},
         "full_automation": {"name": "Full Automation", "text": "No humans, maximum efficiency.", "effects": {"automation": 2, "transparency": -1, "stability": -1}, "passive": None},
-        "user_communication": {"name": "User Communication", "text": "You set up support for your clients.", "effects": {"transparency": 1}, "passive": None},
-        "explainable_documentation": {"name": "Explainable Documentation", "text": "Preview 1 card from next round before drawing.", "effects": {"transparency": 1, "integrity": 1}, "passive": {"type": "peek_next_card"}},
-        "black_box_model": {"name": "Black Box Model", "text": "Huge automation boost. But one card hidden each round.", "effects": {"automation": 3}, "passive": {"type": "hidden_card"}},
+        "user_communication": {"name": "User Communication", "text": "You set up support for your clients.", "effects": {"transparency": 2}, "passive": None},
+        "explainable_documentation": {"name": "Explainable Documentation", "text": "Preview the next three cards you will draw before drawing them.", "effects": {"transparency": 1, "integrity": 1}, "passive": {"type": "peek_next_card"}},
+        "black_box_model": {"name": "Black Box Model", "text": "Huge automation boost. But one card hidden each round.", "effects": {"automation": 4}, "passive": {"type": "hidden_card"}},
         "human_in_the_loop": {"name": "Human in the Loop", "text": "Lowest stat when placed in active gets +5. Recomputed if moved and re-added.", "effects": {}, "passive": {"type": "lowest_stat_boost", "amount": 5}},
-        "bias_fairness": {"name": "Bias Fairness", "text": "The system is evaluated for fairness across groups.", "effects": {"integrity": 2}, "passive": None},
+        "bias_fairness": {"name": "Bias Fairness", "text": "The system is evaluated for fairness across groups.", "effects": {"integrity": 3}, "passive": None},
         "shadow_deployment": {"name": "Shadow Deployment", "text": "After each round, a random stat gets +1 or -1.", "effects": {}, "passive": {"type": "random_stat_per_round"}},
         "procurement_cut": {"name": "Procurement Cut", "text": "Shady vendor: no questions asked.", "effects": {"automation": 1, "stability": -1, "integrity": -1}, "passive": None},
         "data_privacy": {"name": "Data Privacy", "text": "Limits scope but increases trust.", "effects": {"generalizability": -1, "integrity": 1}, "passive": None},
         "safety_risk_control": {"name": "Safety Risk Control", "text": "Safety first!", "effects": {"stability": 2}, "passive": None},
-        "alignment": {"name": "Alignment", "text": "System is aligned with company goals.", "effects": {"integrity": 1, "generalizability": 1}, "passive": None},
+        "alignment": {"name": "Alignment", "text": "System is aligned with company goals.", "effects": {"integrity": 2}, "passive": None},
         "model_drift": {"name": "Model Drift", "text": "Whoops! Your model degraded.", "effects": {"integrity": -1, "generalizability": -1, "stability": -1}, "passive": None},
-        "regularization": {"name": "Regularization", "text": "All negative stat debuffs are capped to -1.", "effects": {}, "passive": {"type": "cap_negatives"}},
+        "regularization": {"name": "Regularization", "text": "All negative stat debuffs are reversed.", "effects": {}, "passive": {"type": "reverse_negatives"}},
         "robustness_testing": {"name": "Robustness Testing", "text": "Varied conditions don't scare you.", "effects": {"generalizability": 1, "stability": 1}, "passive": None},
         "local_explainability": {"name": "Local Explainability", "text": "Pinpoint interpretability.", "effects": {"transparency": 1, "integrity": 1}, "passive": None},
-        "carbon_footprint": {"name": "Carbon Footprint", "text": "Resource overuse: adds an extra active slot. You will be judged.", "effects": {"integrity": -3}, "passive": {"type": "extra_slot"}},
+        "carbon_footprint": {"name": "Carbon Footprint", "text": "Resource overuse: adds an extra active slot. You will be judged.", "effects": {"automation": 2, "integrity": -4}, "passive": {"type": "extra_slot"}},
         "overfitting": {"name": "Overfitting", "text": "Your model memorized the data instead of learning.", "effects": {"generalizability": -2, "integrity": -1}, "passive": None},
-        "neural_network": {"name": "Neural Network", "text": "Good model, but not interpretable.", "effects": {"transparency": -3, "automation": 2, "generalizability": 1}, "passive": None},
-        "linear_regression": {"name": "Linear Regression", "text": "Okay model, but not generalizable.", "effects": {"transparency": 1, "automation": 1, "generalizability": -3}, "passive": None},
-        "real_time_api": {"name": "Real Time API", "text": "+1 automation each round. Can't be used with Batch Processing.", "effects": {"stability": -1, "integrity": -1}, "passive": {"type": "per_round_stat", "stat": "automation", "amount": 1}},
+        "neural_network": {"name": "Neural Network", "text": "Good model, but not interpretable.", "effects": {"transparency": -2, "automation": 2, "generalizability": 1}, "passive": None},
+        "linear_regression": {"name": "Linear Regression", "text": "Okay model, but not generalizable.", "effects": {"automation": 2, "transparency": 1, "generalizability": -3}, "passive": None},
+        "real_time_api": {"name": "Real Time API", "text": "+1 automation each round. Can't be used with Batch Processing.", "effects": {"stability": -1, "automation": 1}, "passive": {"type": "per_round_stat", "stat": "automation", "amount": 1}},
         "batch_processing": {"name": "Batch Processing", "text": "+1 stability each round. Can't be used with Real Time API.", "effects": {"stability": 1, "automation": -1}, "passive": {"type": "per_round_stat", "stat": "stability", "amount": 1}},
-        "feature_engineering": {"name": "Feature Engineering", "text": "One random card's stats are doubled.", "effects": {"automation": 1, "generalizability": -1}, "passive": {"type": "chance_double_effects"}},
+        "feature_engineering": {"name": "Feature Engineering", "text": "One random stat is doubled.", "effects": {"automation": 1, "generalizability": -1}, "passive": {"type": "bind_stat_double"}},
         "ab_testing": {"name": "AB Testing", "text": "You conduct experiments to validate your model.", "effects": {"stability": 2, "integrity": 1}, "passive": None},
         "reward_hacking": {"name": "Reward Hacking", "text": "The model optimizes for the wrong objective.", "effects": {"automation": 1, "integrity": -1}, "passive": None},
-        "hallucination": {"name": "Hallucination", "text": "Whooosh!", "effects": {"generalizability": -1, "integrity": -1}, "passive": None},
-        "fine_tuning": {"name": "Fine-Tuning", "text": "Lowest stat is floored, cannot go further down.", "effects": {}, "passive": {"type": "lowest_stat_floor"}},
-        "ontology_integration": {"name": "Ontology Integration", "text": "Structured knowledge: improves reliability.", "effects": {"integrity": 1, "stability": 1}, "passive": None},
-        "cross_validation": {"name": "Cross-Validation", "text": "Standard protocol for model validation.", "effects": {"integrity": 1}, "passive": None},
-        "catastrophic_forgetting": {"name": "Catastrophic Forgetting", "text": "Wait... what was I doing again?", "effects": {"generalizability": -3}, "passive": None},
+        "hallucination": {"name": "Hallucination", "text": "Whooosh!", "effects": {"generalizability": -2, "stability": -1, "integrity": -1}, "passive": None},
+        "fine_tuning": {"name": "Fine-Tuning", "text": "You fine-tune on your use case. Highest stat skyrocketed.", "effects": {}, "passive": {"type": "highest_stat_boost", "amount": 10}},
+        "ontology_integration": {"name": "Ontology Integration", "text": "Structured knowledge: improves reliability.", "effects": {"integrity": 2, "stability": 1}, "passive": None},
+        "cross_validation": {"name": "Cross-Validation", "text": "Standard protocol for model validation.", "effects": {"integrity": 1, "stability": 2}, "passive": None},
+        "catastrophic_forgetting": {"name": "Catastrophic Forgetting", "text": "Wait... what was I doing again?", "effects": {"generalizability": -3, "stability": -3}, "passive": None},
     }
 
 
@@ -245,22 +249,22 @@ def load_cards_from_file(cards_dir: str) -> List[Card]:
     return cards
 
 
+def _fine_tuning_boost_amount(state: State) -> int:
+    for c in state.active_slots:
+        if c and c.key == "fine_tuning" and c.passive and c.passive.get("type") == "highest_stat_boost":
+            return int(c.passive.get("amount", 10))
+    return 10
+
+
 def recompute_stats_from_active(state: State) -> None:
-    """Set all 5 stats from base + active card effects, then apply passives (human_in_loop boost, fine_tune floors, regularization cap, per-round bonuses)."""
+    """Set all 5 stats from base + active card effects, then passives; Feature Engineering adds each bound stat's pre-FE snapshot again (×2 that stat per FE)."""
     state.transparency = STAT_BASE
     state.stability = STAT_BASE
     state.automation = STAT_BASE
     state.generalizability = STAT_BASE
     state.integrity = STAT_BASE
     cap = get_active_slot_capacity(state)
-    # Feature engineering: pick a random other active card to double (stats only) if not yet set
-    has_fe = _has_active_card_by_key(state, "feature_engineering")
-    fe_slot = next((i for i in range(cap) if i < len(state.active_slots) and state.active_slots[i] and state.active_slots[i].key == "feature_engineering"), None)
-    if has_fe and state.feature_engineering_doubled_slot is None:
-        other_slots = [j for j in range(min(cap, len(state.active_slots))) if state.active_slots[j] is not None and j != fe_slot]
-        if other_slots:
-            state.feature_engineering_doubled_slot = random.choice(other_slots)
-    # Apply card effects (with optional regularization cap; feature_engineering doubles one slot's effects)
+    # Apply card effects (regularization flips negatives on printed effects)
     has_regularization = _has_active_card_by_key(state, "regularization")
     for i in range(min(cap, len(state.active_slots))):
         card = state.active_slots[i]
@@ -270,10 +274,7 @@ def recompute_stats_from_active(state: State) -> None:
         if has_regularization:
             for s in list(eff.keys()):
                 if eff[s] < 0:
-                    eff[s] = max(-1, eff[s])
-        if i == state.feature_engineering_doubled_slot:
-            for s in list(eff.keys()):
-                eff[s] = eff[s] * 2
+                    eff[s] = -eff[s]
         state.apply(eff)
     # Per-round bonuses (real_time_api, batch_processing) - only one applies if both present
     has_realtime = _has_active_card_by_key(state, "real_time_api")
@@ -286,25 +287,41 @@ def recompute_stats_from_active(state: State) -> None:
     for slot_idx, stat in state.human_in_loop_boost.items():
         if stat is not None and slot_idx < len(state.active_slots) and state.active_slots[slot_idx]:
             state.apply({stat: 5})
-    # Fine-tune floors: clamp stats to their floors
-    for stat, floor in state.fine_tune_floors.items():
-        cur = state.get_stat(stat)
-        if cur < floor:
-            setattr(state, stat, floor)
+    if _has_active_card_by_key(state, "fine_tuning") and state.fine_tune_boost_stats:
+        amt = _fine_tuning_boost_amount(state)
+        for stat in state.fine_tune_boost_stats:
+            state.apply({stat: amt})
+    # Feature Engineering: each instance adds its bound stat's value as it was just above (pre-FE doubling), doubling that stat for each FE on it.
+    fe_cards = [
+        state.active_slots[i]
+        for i in range(min(cap, len(state.active_slots)))
+        if state.active_slots[i] and state.active_slots[i].key == "feature_engineering"
+    ]
+    if fe_cards:
+        snap: Dict[Stat, int] = {s: state.get_stat(s) for s in STAT_ORDER}
+        for fe in fe_cards:
+            b = state.feature_engineering_stat_by_card_id.get(id(fe))
+            if b is not None:
+                state.apply({b: snap[b]})
 
 
 def on_card_added_to_active(state: State, slot_idx: int, card: Card) -> None:
-    """Update passive state when a card is placed in active (human_in_loop, fine_tuning)."""
+    """Update passive state when a card is placed in active (human_in_loop, fine_tuning, feature_engineering)."""
+    if card.key == "feature_engineering":
+        cid = id(card)
+        if cid not in state.feature_engineering_stat_by_card_id:
+            state.feature_engineering_stat_by_card_id[cid] = random.choice(list(STAT_ORDER))
     if card.key == "human_in_the_loop" and card.passive and card.passive.get("type") == "lowest_stat_boost":
         recompute_stats_from_active(state)
         stats: List[Stat] = list(STAT_ORDER)
         lowest_stat = min(stats, key=lambda s: state.get_stat(s))
         state.human_in_loop_boost[slot_idx] = lowest_stat
-    if card.key == "fine_tuning" and card.passive and card.passive.get("type") == "lowest_stat_floor":
+    if card.key == "fine_tuning" and card.passive and card.passive.get("type") == "highest_stat_boost":
+        state.fine_tune_boost_stats.clear()
         recompute_stats_from_active(state)
-        stats = list(STAT_ORDER)
-        lowest_stat = min(stats, key=lambda s: state.get_stat(s))
-        state.fine_tune_floors[lowest_stat] = state.get_stat(lowest_stat)
+        stats_order = list(STAT_ORDER)
+        mx = max(state.get_stat(s) for s in stats_order)
+        state.fine_tune_boost_stats = [s for s in stats_order if state.get_stat(s) == mx]
     recompute_stats_from_active(state)
 
 
@@ -312,7 +329,7 @@ def on_card_removed_from_active(state: State, slot_idx: int, card: Card) -> None
     """Clear passive state for that slot/card (human_in_loop, fine_tuning). Per-round bonuses are kept until card is trashed."""
     state.human_in_loop_boost.pop(slot_idx, None)
     if card.key == "fine_tuning":
-        state.fine_tune_floors.clear()
+        state.fine_tune_boost_stats.clear()
 
 
 def on_card_trashed(state: State, card: Card) -> None:
@@ -321,6 +338,8 @@ def on_card_trashed(state: State, card: Card) -> None:
         state.realtime_api_bonus = 0
     if card.key == "batch_processing":
         state.batch_processing_bonus = 0
+    if card.key == "feature_engineering":
+        state.feature_engineering_stat_by_card_id.pop(id(card), None)
 
 
 def get_active_stats(round_idx: int) -> List[Stat]:
@@ -356,10 +375,12 @@ def apply_condition_passives_end_of_round(state: State) -> None:
 
 
 # Target probability per draw for each rarity (renormalized if a tier is exhausted mid-deck).
+
+##NOTE: THE REWORKED RARITY DRAW WEIGHTS, -kayra
 _RARITY_DRAW_WEIGHTS: Tuple[Tuple[str, float], ...] = (
     ("common", 0.45),
-    ("rare", 0.25),
-    ("epic", 0.15),
+    ("rare", 0.30),
+    ("epic", 0.10),
     ("cursed", 0.15),
 )
 
@@ -409,6 +430,7 @@ def get_deck_for_round(rng: random.Random, round_idx: int, cards_pool: Optional[
 
 
 # --- Phase 2: post-contract AI challenge (play a card to answer) ---
+## NOTE: THE REWORKED PHASE 2, -kayra
 
 _PHASE2_QUESTION_POOL = [
     {
@@ -862,7 +884,7 @@ def pick_phase2_questions(rng: random.Random, player_keys: set[str], count: int 
     return []
 
 
-# --- Final stage: hospital triage ---
+# --- Final stage: hospital triage --- ##NOTE: REWORKED, -kayra
 
 def get_final_stage_intro() -> List[str]:
     return [
