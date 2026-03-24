@@ -102,31 +102,6 @@ def contract_fulfilled(state: State, contract_key: Optional[str]) -> bool:
     return True
 
 
-def round_story(round_idx: int) -> str:
-    """Story beat for each round, aligned with metric introduction and learning."""
-    beats = {
-        1: "Stakeholders want honesty. Choose a model that is explainable.",
-        2: "People must believe the system. Build trust before you scale.",
-        3: "Real data is messy. Ensure the system treats everyone fairly.",
-        4: "Launch pressure rises. Balance speed with accountability.",
-        5: "The system is live. One mistake can cost public trust.",
-        6: "Scrutiny grows. Transparency and fairness are under the lens.",
-        7: "Optimization calls. More automation often means less oversight.",
-        8: "Incidents surface. Rebuilding trust is harder than keeping it.",
-        9: "Stakeholders want results. Ethics and efficiency pull in different directions.",
-        10: "The pipeline is complex. Every shortcut has a cost.",
-        11: "Regulation looms. Explainability and fairness are no longer optional.",
-        12: "The final stretch. Every choice affects trust, fairness, and transparency.",
-        13: "Final stage.",
-    }
-    return beats.get(round_idx, f"Round {round_idx}")
-
-
-def get_round_constraint(round_idx: int) -> Optional[Tuple[Stat, int]]:
-    """No per-round constraints; scenario has one overall requirement."""
-    return None
-
-
 ACTIVE_SLOT_CAPACITY_BASE = 5
 ACTIVE_SLOT_CAPACITY = 6  # max slots (5 base + 1 when carbon_footprint in active)
 STAT_BASE = 5

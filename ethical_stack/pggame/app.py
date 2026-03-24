@@ -22,7 +22,6 @@ from ethical_stack.pggame.content import (
     get_final_stage_intro,
     get_final_stage_outcome,
     get_final_stage_questions,
-    get_round_constraint,
     get_scenario_objective_lines,
     get_scenario_objective_text,
     STAT_ORDER,
@@ -648,55 +647,6 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
             or state.generalizability < 0 or state.integrity < 0
         )
 
-    def check_round_constraint() -> bool:
-        """True if constraint failed (player loses)."""
-        c = get_round_constraint(state.round_idx)
-        if c is None:
-            return False
-        stat, min_val = c
-        return state.get_stat(stat) < min_val
-
-    def risk_check() -> Tuple[bool, Optional[str]]:
-        """
-        THE “critical decisions” mechanic:
-        - Risk >= 6: guaranteed crash event (big penalty)
-        - Risk >= 4: 50% chance of a smaller hit
-        """
-        return False, None
-
-    def apply_risk_event(kind: str) -> None:
-        """Removed: no risk mechanic."""
-        return
-        if kind == "100":
-            if roll == 0:
-                # Public backlash
-                state.trust -= 4
-            elif roll == 1:
-                # Bias scandal
-                state.fairness -= 4
-            elif roll == 2:
-                # “Why can’t you explain this?”
-                state.transparency -= 3
-                state.trust -= 2
-            else:
-                # Emergency rollback slows everything
-                state.automation -= 3
-                state.trust -= 2
-        else:
-            if roll == 0:
-                state.trust -= 2
-            elif roll == 1:
-                state.fairness -= 2
-            elif roll == 2:
-                state.transparency -= 2
-            else:
-                state.automation -= 2
-            pass
-
-        # Round 5: “no rollback” means the same incident hurts trust more.
-        if state.round_idx == 5:
-            state.trust -= 1
-
     def end_round() -> None:
         nonlocal message, story_line, mode, contract_eval_passed, game_over_from_contract_eval
         nonlocal phase2_played, phase2_passed_challenge, phase2_cards, phase2_start_centers
@@ -805,9 +755,6 @@ def _run(seed: int | None = None, headless: bool = False, admin_phase2: bool = F
         deck_draw_step_index = 0
         hidden_hand_index = None
         end_round()
-
-    def suit_color(suit: str) -> Tuple[int, int, int]:
-        return RED if suit in ("heart", "diamond") else BLUE
 
     def card_effect_line(c: Card) -> str:
         active = get_active_stats(state.round_idx)
